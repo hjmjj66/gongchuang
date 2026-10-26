@@ -1,0 +1,2 @@
+# Confirm VID/PID with lsusb before installing this rule.
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", SYMLINK+="rm_cboard", MODE="0660", GROUP="dialout"

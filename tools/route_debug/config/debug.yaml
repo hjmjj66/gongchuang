@@ -1,0 +1,8 @@
+host: 0.0.0.0
+port: 8080
+browser_timeout_s: 8.0
+route_control_timeout_s: 0.3
+service_timeout_s: 5.0
+initialization_timeout_s: 20.0
+status_timeout_s: 0.5
+wait_s: 3.0

@@ -1,0 +1,37 @@
+# ROS 2 / colcon generated files
+build/
+install/
+log/
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local tools, credentials, and machine configuration
+/.agents/
+/.aws/
+/.codex/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_ed25519
+.DS_Store
+.idea/
+.vscode/
+*~
+*.swp
+
+# Vendor reference bundles and standalone reference PDFs
+/WHEELTEC*/
+/*.pdf

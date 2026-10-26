@@ -1,0 +1,10 @@
+string run_id
+bool valid
+uint64 task_revision
+string raw_code
+uint8[] batch1_colors
+uint8[] batch1_positions
+uint8[] batch2_colors
+uint8[] batch2_positions
+agv_interfaces/FirstLayerRecord[] planned_first_layer
+agv_interfaces/FirstLayerRecord[] confirmed_first_layer

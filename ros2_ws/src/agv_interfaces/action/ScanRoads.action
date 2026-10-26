@@ -1,0 +1,16 @@
+string run_id
+string task_id
+---
+string run_id
+string task_id
+string executor_session_id
+string source
+string outcome
+bool travel_ready
+uint64 map_revision
+agv_interfaces/Edge[] blocked_edges
+string reason
+---
+string run_id
+string task_id
+string phase

@@ -1,0 +1,7 @@
+string run_id
+string task_id
+---
+# Accepted is not necessarily quiescent: an in-flight arm program may drain.
+bool accepted
+string reason
+agv_interfaces/ExecutorRuntime runtime

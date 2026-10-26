@@ -1,0 +1,38 @@
+string run_id
+string task_id
+uint64 task_revision
+uint8 stage
+uint8 batch
+# RAW_PICK / COARSE_PROCESS / STORAGE_PLACE / STORAGE_STACK
+string operation
+uint8[] colors
+uint8[] positions
+agv_interfaces/FirstLayerRecord[] first_layer
+bool enable_motion
+---
+string run_id
+string task_id
+uint64 task_revision
+string executor_session_id
+string source
+# COMPLETED / FAILED / STOPPED / UNKNOWN
+string outcome
+agv_interfaces/WorkStepRecord[] confirmed_steps
+bool all_items_completed
+bool reference_restored
+bool motion_released
+bool arm_idle
+bool travel_ready
+agv_interfaces/FirstLayerRecord[] first_layer_records
+string reason
+---
+string run_id
+string task_id
+string phase
+uint8 item_index
+uint8 color
+uint8 position
+bool arm_pending
+# Cumulative ordered prefix of confirmed steps, not a delta.
+agv_interfaces/WorkStepRecord[] confirmed_steps
+string reason

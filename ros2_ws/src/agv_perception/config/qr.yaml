@@ -1,0 +1,16 @@
+# 二维码识别节点配置；参数在启动时读取，修改后需重启节点。
+qr_node:                         # 对应扫码节点名称
+  ros__parameters:              # ROS2 参数配置入口，请保留此层级
+    # 相机采集设备；优先使用 /dev/v4l/by-id/ 下的稳定路径，避免设备编号变化。
+    camera_device: /dev/v4l/by-id/usb-DH_USB2.0_DH_USB2.0-video-index0
+    camera_width: 640            # 请求图像宽度，单位：像素，取正整数
+    camera_height: 480           # 请求图像高度，单位：像素，取正整数
+    camera_fps: 30.0             # 请求相机采集帧率，单位：帧/秒，须大于0；实际值受驱动影响
+    camera_buffer_size: 4       # V4L2采集缓冲数量，避免单缓冲降低吞吐；线程持续读取并只保留最新帧
+    camera_dynamic_framerate: false # 禁止自动曝光主动降低帧率，保留自动曝光；退出时恢复原控制项
+    scan_rate_hz: 30.0           # 扫码处理目标频率，单位：Hz；实际受算法耗时及相机帧率限制
+    show_preview: false         # true：显示识别预览，需桌面环境；false：关闭预览，适合比赛或SSH
+    result_topic: /qr/result     # 连续5次识别一致后输出一次，消息类型：std_msgs/msg/String
+    center_topic: /qr/center     # 二维码中心像素坐标话题，消息类型：geometry_msgs/msg/PointStamped
+    # 中心坐标消息的坐标系名称；像素原点在图像左上角，x向右、y向下，z固定为0。
+    frame_id: qr_camera_optical_frame

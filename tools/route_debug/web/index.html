@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AGV · 路线与底盘调试</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div><span class="eyebrow">AGV / DEBUG TOOLS</span><h1>路线与底盘调试</h1></div><div id="connection" class="pill">连接中</div></header>
+<main>
+  <section class="map-panel">
+    <div class="panel-title"><h2>赛场地图</h2><span class="subtle">实测二维里程轨迹</span></div>
+    <div class="map-wrap">
+      <img src="/map.png" alt="完整比赛地图及节点1至9编号" id="map-image">
+      <svg id="map-overlay" viewBox="0 0 1035 916" role="img" aria-label="路线与小车估算位置">
+        <polyline id="planned"/><polyline id="trace"/>
+        <g id="start-marker" visibility="hidden"><circle r="24"/><text y="-31">起</text></g>
+        <g id="goal-marker" visibility="hidden"><circle r="32"/><text y="45">终</text></g>
+        <g id="car" visibility="hidden"><circle r="24"/><path d="M 0,-24 L 16,17 L 0,10 L -16,17 Z"/></g>
+      </svg>
+    </div>
+    <div class="legend"><span><i class="planned-key"></i>当前规划</span><span><i class="trace-key"></i>已走轨迹</span><span id="pose-label">等待设置起点</span></div>
+  </section>
+  <aside>
+    <section class="card">
+      <div class="panel-title"><h2>运行设置</h2><span class="tag">真实底盘</span></div>
+      <div class="mode-switch"><button type="button" data-mode="free" class="selected">自由行走</button><button type="button" data-mode="competition">模拟比赛</button></div>
+      <div class="fields">
+        <label>假设当前点 / 起点<select id="start"></select></label>
+        <label>终点 / 最终停车区<select id="goal"></select></label>
+        <label class="full">当前车头朝向<select id="heading"><option value="UP">↑ 地图上方</option><option value="RIGHT">→ 地图右方</option><option value="DOWN" selected>↓ 地图下方</option><option value="LEFT">← 地图左方</option></select></label>
+      </div>
+      <label class="checkbox" id="align-row"><input type="checkbox" id="align">到终点后按固定工作方向对齐</label>
+      <p class="hint" id="mode-hint"></p>
+      <div class="map-status"><span class="dot"></span>全部道路畅通<span class="subtle">封路设置后续加入</span></div>
+      <p class="notice">开始 / 复位前，请把车放到所选起点并摆正车头。切PC会重建里程原点；坐标变化后请重新选择位置并开始。</p>
+      <div class="actions"><button id="start-button" class="primary">启动</button><button id="stop-button" class="danger">停止</button><button id="reset-button">复位</button></div>
+      <p id="operation-message" role="status" aria-live="polite"></p>
+    </section>
+    <section class="card">
+      <div class="panel-title"><h2>执行状态</h2><span class="pill" id="state">待命</span></div>
+      <p class="stage" id="stage">等待连接</p><p class="hint" id="ready-reason"></p>
+      <div class="metrics"><div><span>导航段</span><strong id="route-count">—</strong></div><div><span>等待剩余</span><strong id="countdown">—</strong></div><div><span>运行耗时</span><strong id="elapsed">0.0 s</strong></div></div>
+      <dl><dt>目标 / 路线</dt><dd id="route">—</dd><dt>固定系位置 x / y（初始前 / 左）</dt><dd id="distance">—</dd><dt>连续 yaw</dt><dd id="yaw">—</dd><dt>指令速度（前 vx / 左 vy / 转）</dt><dd id="speed">—</dd></dl>
+      <dl><dt>实际速度（前 vx / 左 vy / 转）</dt><dd id="actual-speed">—</dd><dt>坐标 / 许可代次</dt><dd id="coordinate">—</dd><dt>本段进度</dt><dd id="segment-progress">—</dd></dl>
+      <div class="health-grid"><span id="board-link">C板 —</span><span id="pc-control">PC控制 —</span><span id="odom-health">里程 —</span><span id="motion-health">运动许可 —</span></div>
+      <p class="hint" id="board-reason"></p>
+      <details><summary>实际加载的运动配置</summary><p class="hint" id="config-values">—</p><p class="path" id="config-path"></p></details>
+    </section>
+    <section class="card log-card"><div class="panel-title"><h2>事件记录</h2><span class="subtle">最近80条</span></div><ol id="logs"></ol></section>
+  </aside>
+</main>
+<footer>工作方向：二维码2 → 右 · 原料4 → 上 · 粗加工6 → 下 · 暂存8 → 左。图中位置为里程估算。</footer>
+<script src="/app.js"></script>
+</body></html>

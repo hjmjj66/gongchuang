@@ -1,0 +1,10 @@
+# Compare-and-set prevents a delayed old reset from changing a newer run.
+string expected_run_id
+string run_id
+string reset_id
+int32 home_node
+string initial_heading
+---
+bool accepted
+string reason
+agv_interfaces/ExecutorRuntime runtime

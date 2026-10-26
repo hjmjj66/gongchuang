@@ -1,0 +1,20 @@
+cboard_bridge_node:
+  ros__parameters:
+    # 使用稳定设备路径；真实 VID/PID/序列号请在目标 X5 上确认。
+    serial_port: /dev/rm_cboard
+    # 协议要求 50 Hz；重发不会延长 ROS 输入的有效期。
+    send_rate_hz: 50.0
+    command_timeout_s: 0.05
+    # STATUS 标称 20 Hz，ODOM 标称 100 Hz。以下为首版超时参数。
+    status_timeout_s: 0.2
+    odometry_timeout_s: 0.2
+    # 打滑位仅告警，不单独中止路线；valid/IMU/编码器异常仍停车。
+    # 这不是速度门限，C 板打滑角速度差门限须在板端固件修改。
+    stop_on_slip: false
+    reconnect_interval_s: 1.0
+    # 统一车体系 x前 / y左；位置坐标轴在每次进入PC时固定建立。
+    control_topic: /C/controll
+    odometry_topic: /C/odometry
+    # 原始底盘位姿/速度观测，遥控或运动锁止时仍发布新帧。
+    chassis_odometry_topic: /C/chassis_odometry
+    status_topic: /C/status

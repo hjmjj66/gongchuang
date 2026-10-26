@@ -1,0 +1,18 @@
+# Empty request_id generates a UUID. Reuse of an accepted ID is rejected.
+string run_id
+string request_id
+uint8 stage
+# 0 resolves to the planner's current node (start) or YAML start_area (goal).
+int32 start
+int32 goal
+# Explicit current map heading for synchronization; required with explicit start.
+# Empty with start=0 derives heading from continuous odometry yaw.
+string current_heading
+# Only the destination may receive work rotations; intermediate stations never do.
+bool align_at_goal
+# Empty uses YAML work_heading.node_<goal> when align_at_goal=true.
+# Must be empty when align_at_goal=false.
+string goal_heading
+---
+# The same plan is also published once on /route/path, including failed requests.
+agv_interfaces/RoutePlan plan

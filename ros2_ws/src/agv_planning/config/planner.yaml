@@ -1,0 +1,58 @@
+# 路径规划与运动执行配置；参数在启动时读取，修改后需重启节点。
+route_planner_node:               # 对应路径规划节点名称
+  ros__parameters:                # ROS2 参数配置入口，请保留此层级
+    # 地图编号如下，横向与纵向相邻节点均有道路：
+    # 7 -- 4 -- 1
+    # |    |    |
+    # 8 -- 5 -- 2
+    # |    |    |
+    # 9 -- 6 -- 3
+    # 比赛起点和最终停车区统一在agv_mission/config/mission.yaml设置start_area / finish_area。
+    # mission初始化/复位时同步起点，路径节点随后维护当前位置和连续yaw朝向。
+    # 独立调试未绑定mission时默认从left（节点1）朝二维码区2启动。
+    result_source: REAL           # 比赛规划器固定REAL，mission据此校验执行端来源
+    mission_lease_timeout_s: 2.0  # 绑定比赛后调度心跳失效，停止路线；独立调试空身份不检查
+    # 各工作区的作业朝向，按上图方向填写 UP / RIGHT / DOWN / LEFT。
+    # UNSET表示未配置；请求终点对齐时，需在此处或请求goal_heading中提供朝向。
+    work_heading:                 # 仅终点要求对齐时使用，途中经过工作区不转头
+      node_2: UNSET               # 二维码区
+      node_4: UNSET               # 原料区
+      node_6: UNSET               # 粗加工区
+      node_8: UNSET               # 暂存区
+
+    default_edge_length_mm: 1200  # 默认相邻节点距离，单位：mm，须为正整数
+    # 可选：按实测距离覆盖单条道路长度，单位：mm，须为正整数。
+    # 键名固定为“小编号_大编号”，仅支持地图中相邻节点，双向共用同一距离。
+    # edge_length_mm:
+    #   "2_5": 1180
+    #   "6_9": 1220
+
+    require_map_snapshot: true    # true：收到合法地图快照后才接受规划；false：按全通地图调试
+    plan_service: /route/plan     # 规划并执行服务，类型：agv_interfaces/srv/PlanRoute
+    route_topic: /route/path      # 调试输出：同一条RoutePlan消息包含目标路线和行动链
+    blocked_edges_topic: /map/blocked_edges  # 封路地图输入，类型：agv_interfaces/msg/BlockedEdges
+    # 里程反馈输入，类型：agv_interfaces/msg/OdometryFeedback；后续由板间通信节点发布。
+    # x_m/y_m是本次固定坐标位置（m）；按本段起点与目标方向投影求进度。
+    # yaw不能回绕到0～360或±180，否则会影响跨界转动的到达判定。
+    odometry_topic: /C/odometry
+    board_status_topic: /C/status
+    board_status_timeout_s: 0.2
+    control_topic: /route/control  # 内部速度与执行状态反馈，类型：agv_interfaces/msg/RouteControl，交给mission转发
+    execution_status_topic: /route/execution_status  # 执行状态输出，类型：agv_interfaces/msg/RouteExecutionStatus
+
+    # 车体坐标：vx向前为正、vy向左为正（m/s），角速度逆时针为正（°/s）。
+    # 以下速度均填正的大小，前后左右及转向的正负由行动自动决定。
+    # 连续同类动作合并后只在整段末尾减速停车，例如两个前进合成2400mm。
+    translation_fast_mps: 0.5     # 平移匀速段速度v0，单位：m/s，须大于0
+    translation_slow_mps: 0.01     # 平移减速末端速度v1，单位：m/s，须大于0且不大于v0
+    translation_deceleration_mm: 100.0  # 剩余此距离开始匀减速，单位：mm；1200mm行程从1100mm开始减速
+    translation_arrival_tolerance_mm: 1.5  # 剩余距离不大于此值即发零停车，单位：mm，可为0，须小于减速区和最短边长
+
+    turn_fast_deg_s: 60.0        # 转动匀速段角速度，单位：°/s，须大于0
+    turn_slow_deg_s: 10.0         # 转动减速末端角速度，单位：°/s，须大于0且不大于匀速角速度
+    turn_deceleration_deg: 5.0    # 剩余此角度开始匀减速，单位：°；90°转向从85°开始，180°从175°开始
+    turn_arrival_tolerance_deg: 0.2  # 剩余角度不大于此值即发零停车，单位：°，可为0，须小于减速区和90°
+
+    odometry_timeout_s: 0.5       # 里程反馈最大接收间隔，单位：秒，须大于0；超时停车并中止执行
+    motion_progress_timeout_s: 2.0  # 执行中路程或转角未推进的最大时长，单位：秒，须大于0；超时停车并中止
+    control_rate_hz: 50.0         # 运动控制循环频率，单位：Hz，须大于0

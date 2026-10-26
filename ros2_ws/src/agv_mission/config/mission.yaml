@@ -1,0 +1,19 @@
+# 比赛调度配置；参数启动时读取，修改后重启。
+mission_node:                         # 比赛调度节点名称
+  ros__parameters:                    # ROS2参数入口，保留此层级
+    mode: competition                 # 实车比赛模式，所有必需执行端的结果来源必须为REAL
+    # 面向二维码板时，左侧启停区1为left，右侧启停区3为right。
+    # 开局车头均朝向二维码区2；mission初始化/复位时将起点同步给路径节点。
+    start_area: left                  # 比赛起点：left / right
+    finish_area: left                 # 比赛最终停车终点：left / right；与起点独立，同区起停时两项填相同值
+    state_publish_rate_hz: 2.0        # 比赛状态发布频率，单位Hz，须大于0
+    response_timeout_s: 5.0           # 接口响应超时，单位秒，须大于0；结果未知时不重发运动
+    initialization_timeout_s: 15.0    # 初始化等待时限，单位秒，须大于0
+    runtime_max_age_s: 1.0            # 执行端运行状态最大有效时长，单位秒，须大于0
+    route_control_topic: /route/control  # 路径节点原始速度及状态输入，类型agv_interfaces/msg/RouteControl
+    control_topic: /C/controll        # mission独占的最终速度输出，类型agv_interfaces/msg/ControlCommand；C板通信只读此话题
+    route_control_timeout_s: 0.3      # 当前导航速度反馈最大有效时长/接收间隔，单位秒，须大于0；超时归零并故障停车
+    board_status_timeout_s: 0.2       # REAL底盘状态最大有效年龄；MOCK路线不依赖C板
+    control_rate_hz: 50.0             # 转发超时检查与待命零速发布频率，单位Hz，须大于0；运动速度随新反馈即时转发
+    qr_input_topic: /qr/result           # 扫码节点连续5次确认后输出的原始文本
+    qr_result_topic: /mission/qr_result  # 调度校验通过后转发一次；String，保留最近结果
