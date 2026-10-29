@@ -37,6 +37,8 @@ class MissionContext:
     current_heading: str = ''
     map_revision: int = 0
     blocked_edges: tuple = ()
+    manual_forbidden_routes: tuple = ()
+    manual_blocked_edges: tuple = ()
     reason: str = ''
     quiescent: bool = False
     arm_pending: bool = False

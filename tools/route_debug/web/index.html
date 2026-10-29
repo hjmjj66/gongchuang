@@ -30,9 +30,10 @@
         <label class="full">当前车头朝向<select id="heading"><option value="UP">↑ 地图上方</option><option value="RIGHT">→ 地图右方</option><option value="DOWN" selected>↓ 地图下方</option><option value="LEFT">← 地图左方</option></select></label>
       </div>
       <label class="checkbox" id="align-row"><input type="checkbox" id="align">到终点后按固定工作方向对齐</label>
+      <label class="checkbox" id="exit-start-row"><input type="checkbox" id="exit-start">起步斜移出启停区（仅起点1或3）</label>
       <p class="hint" id="mode-hint"></p>
       <div class="map-status"><span class="dot"></span>全部道路畅通<span class="subtle">封路设置后续加入</span></div>
-      <p class="notice">开始 / 复位前，请把车放到所选起点并摆正车头。切PC会重建里程原点；坐标变化后请重新选择位置并开始。</p>
+      <p class="notice">开始 / 复位前，请把车放到所选起点并摆正车头；模拟比赛或开启起步斜移时，请摆在启停区内，车辆会先斜移至角点。切PC会重建里程原点；坐标变化后请重新选择位置并开始。</p>
       <div class="actions"><button id="start-button" class="primary">启动</button><button id="stop-button" class="danger">停止</button><button id="reset-button">复位</button></div>
       <p id="operation-message" role="status" aria-live="polite"></p>
     </section>
@@ -49,6 +50,6 @@
     <section class="card log-card"><div class="panel-title"><h2>事件记录</h2><span class="subtle">最近80条</span></div><ol id="logs"></ol></section>
   </aside>
 </main>
-<footer>工作方向：二维码2 → 右 · 原料4 → 上 · 粗加工6 → 下 · 暂存8 → 左。图中位置为里程估算。</footer>
+<footer>作业时车头方向：二维码2 ↓ 下（左侧作业） · 原料4 ← 左 · 粗加工6 → 右 · 暂存8 ↓ 下（后三者右侧作业）。图中位置为里程估算。</footer>
 <script src="/app.js"></script>
 </body></html>

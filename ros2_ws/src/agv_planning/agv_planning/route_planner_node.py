@@ -16,18 +16,11 @@ from agv_interfaces.msg import (
 )
 from agv_interfaces.srv import PlanRoute
 
-from .motion import merge_steps, ramp_speed
+from .motion import TRANSLATIONS, merge_steps, ramp_speed
 from .odometry import body_to_fixed, projection
-from .planner import EDGES, HEADINGS, Opcode, Topology, check_node, normalize_heading
+from .planner import EDGES, HEADINGS, Opcode, Topology, check_node, normalize_heading, parking_step
 from .executor_contract import ExecutorContract
 
-
-TRANSLATIONS = {
-    Opcode.FORWARD_ONE_EDGE: (1.0, 0.0),
-    Opcode.BACKWARD_ONE_EDGE: (-1.0, 0.0),
-    Opcode.STRAFE_LEFT_ONE_EDGE: (0.0, 1.0),
-    Opcode.STRAFE_RIGHT_ONE_EDGE: (0.0, -1.0),
-}
 
 class _DuplicateRequestId(Exception):
     pass
@@ -269,8 +262,8 @@ class RoutePlannerNode(Node):
             raise ValueError('run_id mismatch or mission lease expired')
         if request.run_id and (request.start != 0 or request.current_heading):
             raise ValueError('Competition requests must use confirmed start=0 and feedback heading')
-        if not 0 <= request.stage <= 15:
-            raise ValueError('stage must be 0 (debug) or 1..15')
+        if not 0 <= request.stage <= 17:
+            raise ValueError('stage must be in 0..17')
         if self._context_invalid:
             raise ValueError('Map pose invalidated; reset executor context with confirmed pose')
         if request.start == 0 and not self._position_known:
@@ -293,6 +286,14 @@ class RoutePlannerNode(Node):
                 raise ValueError(f'work_heading.node_{goal} is UNSET; configure or supply goal_heading')
         elif request.goal_heading:
             raise ValueError('goal_heading must be empty when align_at_goal=false')
+        if request.parking_maneuver:
+            if (request.parking_maneuver not in ('EXIT', 'ENTER') or start != goal
+                    or goal not in (1, 3) or request.align_at_goal):
+                raise ValueError('parking maneuver requires EXIT/ENTER, start=goal=1/3 and no alignment')
+            if request.parking_offset_mm <= self._translation_tolerance_mm:
+                raise ValueError('parking offset must exceed translation arrival tolerance')
+        elif request.parking_offset_mm:
+            raise ValueError('parking_offset_mm requires a parking maneuver')
         return start, goal, heading, goal_heading
 
     def _on_plan(self, request, response):
@@ -313,7 +314,8 @@ class RoutePlannerNode(Node):
             if self._active:
                 plan.status = 'execution_in_progress'
                 plan.reason = 'A previous route is still executing'
-            elif self._require_snapshot and not self._map_ready:
+            elif (self._require_snapshot and not self._map_ready
+                  and request.parking_maneuver != 'EXIT'):
                 plan.status = 'map_not_ready'
                 plan.reason = 'No valid map snapshot received; publish an explicit snapshot first'
             elif self._odom_fault:
@@ -328,11 +330,15 @@ class RoutePlannerNode(Node):
                     plan.status = 'no_path'
                     plan.reason = 'No route between endpoints with the current blocked edges'
                 else:
-                    steps = self._topology.build_steps(result.nodes, heading, goal_heading)
+                    steps = ((parking_step(goal, heading, request.parking_maneuver,
+                                           request.parking_offset_mm),)
+                             if request.parking_maneuver else
+                             self._topology.build_steps(result.nodes, heading, goal_heading))
                     plan.actions = [self._to_message_step(index, step)
                                     for index, step in enumerate(steps)]
                     plan.nodes = list(result.nodes)
-                    plan.total_distance_mm = result.total_distance_mm
+                    plan.total_distance_mm = (round(request.parking_offset_mm * math.sqrt(2.0))
+                                              if request.parking_maneuver else result.total_distance_mm)
                     plan.direction_changes = result.direction_changes
                     plan.end_heading = goal_heading or heading
                     plan.status = 'ok'
@@ -410,16 +416,20 @@ class RoutePlannerNode(Node):
             self._segment_progress_time = time.monotonic()
         x_base, y_base, yaw_base = self._segment_baseline
         if segment.opcode in TRANSLATIONS:
-            traveled, _ = projection((x_base, y_base), self._position, self._direction)
+            vx_sign, vy_sign = TRANSLATIONS[segment.opcode]
+            if vx_sign and vy_sign:
+                velocities, traveled, done = self._diagonal_motion(segment, vx_sign, vy_sign)
+            else:
+                traveled, _ = projection((x_base, y_base), self._position, self._direction)
+                remaining = segment.amount - traveled
+                speed = ramp_speed(remaining, self._translation_decel_mm, self._v_fast,
+                                   self._v_slow, self._translation_tolerance_mm)
+                velocities = vx_sign * speed, vy_sign * speed
+                done = remaining <= self._translation_tolerance_mm
             if self._check_motion_progress(max(0.0, traveled)):
                 self._abort('no progress along target direction')
                 return
-            remaining = segment.amount-traveled
-            speed = ramp_speed(remaining, self._translation_decel_mm, self._v_fast,
-                               self._v_slow, self._translation_tolerance_mm)
-            vx_sign, vy_sign = TRANSLATIONS[segment.opcode]
-            self._publish_control(vx_sign * speed, vy_sign * speed, 0.0)
-            done = remaining <= self._translation_tolerance_mm
+            self._publish_control(*velocities, 0.0)
         else:
             sign = 1.0 if segment.opcode == Opcode.TURN_LEFT_90 else -1.0
             turned = (self._yaw_deg - yaw_base) * sign
@@ -447,6 +457,23 @@ class RoutePlannerNode(Node):
             else:
                 self._segment_baseline = None
                 self._publish_status(self._request_id, 'EXECUTING', self._segment_index, '')
+
+    def _diagonal_motion(self, segment, vx_sign, vy_sign):
+        x_base, y_base, yaw_base = self._segment_baseline
+        dx, dy = body_to_fixed(self._position[0] - x_base, self._position[1] - y_base,
+                              -math.radians(yaw_base))
+        axis_target = segment.amount / math.sqrt(2.0)
+        axis_progress = (math.copysign(1.0, vx_sign) * dx * 1000.0,
+                         math.copysign(1.0, vy_sign) * dy * 1000.0)
+        remaining_axes = tuple(axis_target - value for value in axis_progress)
+        # Both axes must arrive; one axis alone can have the full diagonal projection.
+        traveled = min(axis_progress) * math.sqrt(2.0)
+        velocities = tuple(math.copysign(1.0, direction) * ramp_speed(
+            remaining, self._translation_decel_mm,
+            abs(direction) * self._v_fast, abs(direction) * self._v_slow,
+            self._translation_tolerance_mm)
+            for direction, remaining in zip((vx_sign, vy_sign), remaining_axes))
+        return velocities, traveled, max(remaining_axes) <= self._translation_tolerance_mm
 
     def _check_motion_progress(self, progress):
         if progress > self._segment_progress + 0.1:

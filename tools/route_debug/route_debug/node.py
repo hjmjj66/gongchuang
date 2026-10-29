@@ -44,6 +44,10 @@ class DebugNode(Node):
             if key not in ('host',) and (not isinstance(value, (float, int)) or not math.isfinite(value) or value <= 0):
                 raise ValueError(f'无效调试配置：{key}')
         params = load_parameters(args.planner_config, 'route_planner_node')
+        mission_params = load_parameters(args.mission_config, 'mission_node')
+        parking_offset = mission_params.get('parking_offset_mm', 200)
+        if type(parking_offset) is not int or not 0 < parking_offset <= 4294967295:
+            raise ValueError('parking_offset_mm must be a positive uint32 integer in mm')
         self.odom_timeout = float(params.get('odometry_timeout_s', .5))
         default = params.get('default_edge_length_mm', 1200)
         lengths = {}
@@ -56,7 +60,8 @@ class DebugNode(Node):
             translation_slow_mps=params.get('translation_slow_mps', .1),
             turn_fast_deg_s=params.get('turn_fast_deg_s', 180.),
             turn_slow_deg_s=params.get('turn_slow_deg_s', 60.),
-            odometry_timeout_s=self.odom_timeout)
+            odometry_timeout_s=self.odom_timeout, parking_offset_mm=parking_offset,
+            mission_source=str(Path(args.mission_config).resolve()))
         self.pub = self.create_publisher(ControlCommand, '/C/controll', 1)
         self.lease_pub = self.create_publisher(String, PREFIX + '/heartbeat', 1)
         self.map_pub = self.create_publisher(BlockedEdges, PREFIX + '/map', 1)
@@ -65,7 +70,7 @@ class DebugNode(Node):
                          ('reset_context', ResetExecutor), ('stop', StopExecutor)]}
         self.types = dict(plan=PlanRoute, get_runtime=GetExecutorRuntime,
                           reset_context=ResetExecutor, stop=StopExecutor)
-        self.session = Session(self, config, lengths)
+        self.session = Session(self, config, lengths, parking_offset_mm=parking_offset)
         self.subscriptions_ = [
             self.create_subscription(CBoardStatus, '/C/status',
                                      self._board, 1),
@@ -253,6 +258,7 @@ def main():
     parser.add_argument('--host')
     parser.add_argument('--port', type=int)
     parser.add_argument('--planner-config', default=str(ROOT / 'ros2_ws/src/agv_planning/config/planner.yaml'))
+    parser.add_argument('--mission-config', default=str(ROOT / 'ros2_ws/src/agv_mission/config/mission.yaml'))
     parser.add_argument('--debug-config', default=str(TOOL / 'config/debug.yaml'))
     args = parser.parse_args()
     if args.check:

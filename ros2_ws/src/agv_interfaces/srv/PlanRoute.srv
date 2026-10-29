@@ -13,6 +13,11 @@ bool align_at_goal
 # Empty uses YAML work_heading.node_<goal> when align_at_goal=true.
 # Must be empty when align_at_goal=false.
 string goal_heading
+# Empty: normal topology route. EXIT / ENTER: diagonal at start=goal (node 1 or 3).
+# EXIT may run before the startup map snapshot. Heading stays unchanged.
+string parking_maneuver
+# Displacement along EACH body axis, in mm; used only for parking maneuvers.
+uint32 parking_offset_mm
 ---
 # The same plan is also published once on /route/path, including failed requests.
 agv_interfaces/RoutePlan plan

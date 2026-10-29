@@ -1,0 +1,104 @@
+{"time_utc": "2026-10-28T15:17:25.874242+00:00", "monotonic_s": 1830.44815354, "kind": "connection", "port": "/dev/pts/0", "baud": 9600}
+{"time_utc": "2026-10-28T15:17:25.875226+00:00", "monotonic_s": 1830.449097541, "kind": "tx", "command": "show_number.t0.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:25.976024+00:00", "monotonic_s": 1830.549974502, "kind": "tx", "command": "show_number.t1.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:26.077132+00:00", "monotonic_s": 1830.651087381, "kind": "tx", "command": "page select_routine", "hex": "70 61 67 65 20 73 65 6c 65 63 74 5f 72 6f 75 74 69 6e 65 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:26.178117+00:00", "monotonic_s": 1830.752009469, "kind": "message", "text": "\n[阶段1] 请在屏幕选择不能走的路径，再按 OK；不选表示无人工禁行。"}
+{"time_utc": "2026-10-28T15:17:26.178453+00:00", "monotonic_s": 1830.752320636, "kind": "message", "text": "请核对屏幕高亮是否保留了上轮选择，必要时手动取消。"}
+{"time_utc": "2026-10-28T15:17:26.178815+00:00", "monotonic_s": 1830.752678136, "kind": "rx", "hex": "43 46 47 2c 31 2c 31 0d 0a"}
+{"time_utc": "2026-10-28T15:17:26.179756+00:00", "monotonic_s": 1830.75362122, "kind": "event", "message": "CFG", "values": [1, 1], "state": "ROUTE"}
+{"time_utc": "2026-10-28T15:17:26.179945+00:00", "monotonic_s": 1830.753806553, "kind": "message", "text": "尚未收到本轮 ROUTE，请先在路径页按 OK；输入 r 回车可回到路径页。"}
+{"time_utc": "2026-10-28T15:17:26.180213+00:00", "monotonic_s": 1830.754076136, "kind": "rx", "hex": "88 ff ff ff 52 4f 55 54 45 2c 31 33 0d 0a 43 46 47 2c 33 2c 31 0d 0a 52 4f 55 54 45 2c 31 2c 35 2c 31 32 0d 0a"}
+{"time_utc": "2026-10-28T15:17:26.181303+00:00", "monotonic_s": 1830.755165012, "kind": "event", "message": "ROUTE", "values": [1, 5, 12], "state": "ROUTE"}
+{"time_utc": "2026-10-28T15:17:26.181501+00:00", "monotonic_s": 1830.755363304, "kind": "message", "text": "人工禁行路径：1、5、12"}
+{"time_utc": "2026-10-28T15:17:26.181687+00:00", "monotonic_s": 1830.755550054, "kind": "message", "text": "对应双向封锁：7↔4、1↔2、6↔3"}
+{"time_utc": "2026-10-28T15:17:26.181850+00:00", "monotonic_s": 1830.75571272, "kind": "message", "text": "[阶段2] 请在屏幕选择 start/stop，再按 OK。"}
+{"time_utc": "2026-10-28T15:17:26.182111+00:00", "monotonic_s": 1830.755974554, "kind": "rx", "hex": "43 46 47 2c 32 2c 31 0d 0a 43 46 47 2c 31 2c 31 0d 0a"}
+{"time_utc": "2026-10-28T15:17:26.182319+00:00", "monotonic_s": 1830.756182929, "kind": "event", "message": "CFG", "values": [2, 1], "state": "CFG"}
+{"time_utc": "2026-10-28T15:17:26.182506+00:00", "monotonic_s": 1830.756367429, "kind": "message", "text": "start2 → 节点3；stop1 → 节点1"}
+{"time_utc": "2026-10-28T15:17:26.182666+00:00", "monotonic_s": 1830.756527429, "kind": "message", "text": "收到 OK，约 2 秒后模拟开始……"}
+{"time_utc": "2026-10-28T15:17:26.182798+00:00", "monotonic_s": 1830.756662388, "kind": "event", "message": "CFG", "values": [1, 1], "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:26.182956+00:00", "monotonic_s": 1830.756821596, "kind": "ignored", "message": "CFG", "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:28.188982+00:00", "monotonic_s": 1832.762881262, "kind": "message", "text": "比赛开始"}
+{"time_utc": "2026-10-28T15:17:28.190318+00:00", "monotonic_s": 1832.764204138, "kind": "message", "text": "格式错误：必须是四组三位数字，用英文 + 连接。"}
+{"time_utc": "2026-10-28T15:17:28.190806+00:00", "monotonic_s": 1832.764679971, "kind": "tx", "command": "show_number.t0.txt=\"012+345\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 31 32 2b 33 34 35 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:28.291310+00:00", "monotonic_s": 1832.865202643, "kind": "tx", "command": "show_number.t1.txt=\"678+901\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 36 37 38 2b 39 30 31 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:28.391885+00:00", "monotonic_s": 1832.965777981, "kind": "message", "text": "任务码指令已发送：012+345 / 678+901，请观察屏幕。"}
+{"time_utc": "2026-10-28T15:17:28.392827+00:00", "monotonic_s": 1832.966709773, "kind": "message", "text": "格式错误：次数必须是非负整数，允许 0。"}
+{"time_utc": "2026-10-28T15:17:28.393318+00:00", "monotonic_s": 1832.967185023, "kind": "message", "text": "格式错误：次数必须是非负整数，允许 0。"}
+{"time_utc": "2026-10-28T15:17:28.393645+00:00", "monotonic_s": 1832.967507107, "kind": "tx", "command": "page result", "hex": "70 61 67 65 20 72 65 73 75 6c 74 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:28.794490+00:00", "monotonic_s": 1833.368385126, "kind": "tx", "command": "t4.txt=\"0\"", "hex": "74 34 2e 74 78 74 3d 22 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:28.895111+00:00", "monotonic_s": 1833.469004715, "kind": "tx", "command": "t5.txt=\"3\"", "hex": "74 35 2e 74 78 74 3d 22 33 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:28.995650+00:00", "monotonic_s": 1833.569548678, "kind": "message", "text": "统计指令已发送：成功抓取数=0，成功放置数=3。"}
+{"time_utc": "2026-10-28T15:17:28.995960+00:00", "monotonic_s": 1833.569829178, "kind": "message", "text": "请观察结果页，任务码应保持不变；发送完成不代表实屏已验收。"}
+{"time_utc": "2026-10-28T15:17:28.996510+00:00", "monotonic_s": 1833.57037822, "kind": "tx", "command": "show_number.t0.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:29.096993+00:00", "monotonic_s": 1833.670888767, "kind": "tx", "command": "show_number.t1.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:29.197603+00:00", "monotonic_s": 1833.771497773, "kind": "tx", "command": "page select_routine", "hex": "70 61 67 65 20 73 65 6c 65 63 74 5f 72 6f 75 74 69 6e 65 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:29.298133+00:00", "monotonic_s": 1833.872030778, "kind": "message", "text": "\n[阶段1] 请在屏幕选择不能走的路径，再按 OK；不选表示无人工禁行。"}
+{"time_utc": "2026-10-28T15:17:29.298451+00:00", "monotonic_s": 1833.872323612, "kind": "message", "text": "请核对屏幕高亮是否保留了上轮选择，必要时手动取消。"}
+{"time_utc": "2026-10-28T15:17:29.298794+00:00", "monotonic_s": 1833.87265707, "kind": "rx", "hex": "52 4f 55 54 45 0d 0a"}
+{"time_utc": "2026-10-28T15:17:29.299018+00:00", "monotonic_s": 1833.872877945, "kind": "event", "message": "ROUTE", "values": [], "state": "ROUTE"}
+{"time_utc": "2026-10-28T15:17:29.299169+00:00", "monotonic_s": 1833.873027445, "kind": "message", "text": "人工禁行路径：无"}
+{"time_utc": "2026-10-28T15:17:29.299304+00:00", "monotonic_s": 1833.873162154, "kind": "message", "text": "[阶段2] 请在屏幕选择 start/stop，再按 OK。"}
+{"time_utc": "2026-10-28T15:17:29.299524+00:00", "monotonic_s": 1833.873383904, "kind": "rx", "hex": "43 46 47 2c 31 2c 31 0d 0a 43 46 47 2c 31 2c 31 0d 0a"}
+{"time_utc": "2026-10-28T15:17:29.299705+00:00", "monotonic_s": 1833.873562279, "kind": "event", "message": "CFG", "values": [1, 1], "state": "CFG"}
+{"time_utc": "2026-10-28T15:17:29.299858+00:00", "monotonic_s": 1833.873715487, "kind": "message", "text": "start1 → 节点1；stop1 → 节点1"}
+{"time_utc": "2026-10-28T15:17:29.299991+00:00", "monotonic_s": 1833.873849154, "kind": "message", "text": "收到 OK，约 2 秒后模拟开始……"}
+{"time_utc": "2026-10-28T15:17:29.300099+00:00", "monotonic_s": 1833.873958112, "kind": "event", "message": "CFG", "values": [1, 1], "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:29.300211+00:00", "monotonic_s": 1833.874070446, "kind": "ignored", "message": "CFG", "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:31.304783+00:00", "monotonic_s": 1835.878680729, "kind": "message", "text": "比赛开始"}
+{"time_utc": "2026-10-28T15:17:31.305470+00:00", "monotonic_s": 1835.879351855, "kind": "tx", "command": "show_number.t0.txt=\"012+345\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 31 32 2b 33 34 35 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:31.405991+00:00", "monotonic_s": 1835.979880278, "kind": "tx", "command": "show_number.t1.txt=\"678+901\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 36 37 38 2b 39 30 31 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:31.506529+00:00", "monotonic_s": 1836.080426201, "kind": "message", "text": "任务码指令已发送：012+345 / 678+901，请观察屏幕。"}
+{"time_utc": "2026-10-28T15:17:31.507368+00:00", "monotonic_s": 1836.081251452, "kind": "tx", "command": "page result", "hex": "70 61 67 65 20 72 65 73 75 6c 74 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:31.908261+00:00", "monotonic_s": 1836.482156686, "kind": "tx", "command": "t4.txt=\"0\"", "hex": "74 34 2e 74 78 74 3d 22 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:32.008864+00:00", "monotonic_s": 1836.582756693, "kind": "tx", "command": "t5.txt=\"3\"", "hex": "74 35 2e 74 78 74 3d 22 33 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:32.109381+00:00", "monotonic_s": 1836.68327845, "kind": "message", "text": "统计指令已发送：成功抓取数=0，成功放置数=3。"}
+{"time_utc": "2026-10-28T15:17:32.109693+00:00", "monotonic_s": 1836.6835617, "kind": "message", "text": "请观察结果页，任务码应保持不变；发送完成不代表实屏已验收。"}
+{"time_utc": "2026-10-28T15:17:32.110180+00:00", "monotonic_s": 1836.684044076, "kind": "tx", "command": "show_number.t0.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:32.210673+00:00", "monotonic_s": 1836.784568833, "kind": "tx", "command": "show_number.t1.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:32.311432+00:00", "monotonic_s": 1836.885352007, "kind": "tx", "command": "page select_routine", "hex": "70 61 67 65 20 73 65 6c 65 63 74 5f 72 6f 75 74 69 6e 65 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:32.412143+00:00", "monotonic_s": 1836.986042389, "kind": "message", "text": "\n[阶段1] 请在屏幕选择不能走的路径，再按 OK；不选表示无人工禁行。"}
+{"time_utc": "2026-10-28T15:17:32.412493+00:00", "monotonic_s": 1836.986360723, "kind": "message", "text": "请核对屏幕高亮是否保留了上轮选择，必要时手动取消。"}
+{"time_utc": "2026-10-28T15:17:32.412816+00:00", "monotonic_s": 1836.986676514, "kind": "rx", "hex": "52 4f 55 54 45 0d 0a"}
+{"time_utc": "2026-10-28T15:17:32.413034+00:00", "monotonic_s": 1836.98689239, "kind": "event", "message": "ROUTE", "values": [], "state": "ROUTE"}
+{"time_utc": "2026-10-28T15:17:32.413184+00:00", "monotonic_s": 1836.987042723, "kind": "message", "text": "人工禁行路径：无"}
+{"time_utc": "2026-10-28T15:17:32.413317+00:00", "monotonic_s": 1836.987175931, "kind": "message", "text": "[阶段2] 请在屏幕选择 start/stop，再按 OK。"}
+{"time_utc": "2026-10-28T15:17:32.413535+00:00", "monotonic_s": 1836.987392931, "kind": "rx", "hex": "43 46 47 2c 31 2c 32 0d 0a 43 46 47 2c 31 2c 31 0d 0a"}
+{"time_utc": "2026-10-28T15:17:32.413713+00:00", "monotonic_s": 1836.987571182, "kind": "event", "message": "CFG", "values": [1, 2], "state": "CFG"}
+{"time_utc": "2026-10-28T15:17:32.413864+00:00", "monotonic_s": 1836.987721223, "kind": "message", "text": "start1 → 节点1；stop2 → 节点3"}
+{"time_utc": "2026-10-28T15:17:32.413994+00:00", "monotonic_s": 1836.987851848, "kind": "message", "text": "收到 OK，约 2 秒后模拟开始……"}
+{"time_utc": "2026-10-28T15:17:32.414102+00:00", "monotonic_s": 1836.987960015, "kind": "event", "message": "CFG", "values": [1, 1], "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:32.414211+00:00", "monotonic_s": 1836.988069182, "kind": "ignored", "message": "CFG", "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:34.419147+00:00", "monotonic_s": 1838.993043958, "kind": "message", "text": "比赛开始"}
+{"time_utc": "2026-10-28T15:17:34.419820+00:00", "monotonic_s": 1838.99370225, "kind": "tx", "command": "show_number.t0.txt=\"012+345\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 31 32 2b 33 34 35 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:34.520394+00:00", "monotonic_s": 1839.094288717, "kind": "tx", "command": "show_number.t1.txt=\"678+901\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 36 37 38 2b 39 30 31 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:34.620942+00:00", "monotonic_s": 1839.194843434, "kind": "message", "text": "任务码指令已发送：012+345 / 678+901，请观察屏幕。"}
+{"time_utc": "2026-10-28T15:17:34.621831+00:00", "monotonic_s": 1839.195715559, "kind": "tx", "command": "page result", "hex": "70 61 67 65 20 72 65 73 75 6c 74 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:35.022768+00:00", "monotonic_s": 1839.596665217, "kind": "tx", "command": "t4.txt=\"0\"", "hex": "74 34 2e 74 78 74 3d 22 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:35.123371+00:00", "monotonic_s": 1839.697264559, "kind": "tx", "command": "t5.txt=\"3\"", "hex": "74 35 2e 74 78 74 3d 22 33 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:35.223904+00:00", "monotonic_s": 1839.797804152, "kind": "message", "text": "统计指令已发送：成功抓取数=0，成功放置数=3。"}
+{"time_utc": "2026-10-28T15:17:35.224233+00:00", "monotonic_s": 1839.798106318, "kind": "message", "text": "请观察结果页，任务码应保持不变；发送完成不代表实屏已验收。"}
+{"time_utc": "2026-10-28T15:17:35.224739+00:00", "monotonic_s": 1839.798605735, "kind": "tx", "command": "show_number.t0.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:35.325236+00:00", "monotonic_s": 1839.899131869, "kind": "tx", "command": "show_number.t1.txt=\"000+000\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 30 30 30 2b 30 30 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:35.425891+00:00", "monotonic_s": 1839.999782253, "kind": "tx", "command": "page select_routine", "hex": "70 61 67 65 20 73 65 6c 65 63 74 5f 72 6f 75 74 69 6e 65 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:35.526509+00:00", "monotonic_s": 1840.100408929, "kind": "message", "text": "\n[阶段1] 请在屏幕选择不能走的路径，再按 OK；不选表示无人工禁行。"}
+{"time_utc": "2026-10-28T15:17:35.526855+00:00", "monotonic_s": 1840.100724721, "kind": "message", "text": "请核对屏幕高亮是否保留了上轮选择，必要时手动取消。"}
+{"time_utc": "2026-10-28T15:17:35.527181+00:00", "monotonic_s": 1840.101043012, "kind": "rx", "hex": "52 4f 55 54 45 0d 0a"}
+{"time_utc": "2026-10-28T15:17:35.527404+00:00", "monotonic_s": 1840.101263596, "kind": "event", "message": "ROUTE", "values": [], "state": "ROUTE"}
+{"time_utc": "2026-10-28T15:17:35.527555+00:00", "monotonic_s": 1840.101413804, "kind": "message", "text": "人工禁行路径：无"}
+{"time_utc": "2026-10-28T15:17:35.527691+00:00", "monotonic_s": 1840.101548679, "kind": "message", "text": "[阶段2] 请在屏幕选择 start/stop，再按 OK。"}
+{"time_utc": "2026-10-28T15:17:35.527922+00:00", "monotonic_s": 1840.101780179, "kind": "rx", "hex": "43 46 47 2c 32 2c 32 0d 0a 43 46 47 2c 31 2c 31 0d 0a"}
+{"time_utc": "2026-10-28T15:17:35.528115+00:00", "monotonic_s": 1840.101973513, "kind": "event", "message": "CFG", "values": [2, 2], "state": "CFG"}
+{"time_utc": "2026-10-28T15:17:35.528270+00:00", "monotonic_s": 1840.10212818, "kind": "message", "text": "start2 → 节点3；stop2 → 节点3"}
+{"time_utc": "2026-10-28T15:17:35.528401+00:00", "monotonic_s": 1840.102259096, "kind": "message", "text": "收到 OK，约 2 秒后模拟开始……"}
+{"time_utc": "2026-10-28T15:17:35.528511+00:00", "monotonic_s": 1840.102368846, "kind": "event", "message": "CFG", "values": [1, 1], "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:35.528670+00:00", "monotonic_s": 1840.102527263, "kind": "ignored", "message": "CFG", "state": "COUNTDOWN"}
+{"time_utc": "2026-10-28T15:17:37.534540+00:00", "monotonic_s": 1842.108437949, "kind": "message", "text": "比赛开始"}
+{"time_utc": "2026-10-28T15:17:37.535225+00:00", "monotonic_s": 1842.109104241, "kind": "tx", "command": "show_number.t0.txt=\"012+345\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 30 2e 74 78 74 3d 22 30 31 32 2b 33 34 35 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:37.635820+00:00", "monotonic_s": 1842.209715168, "kind": "tx", "command": "show_number.t1.txt=\"678+901\"", "hex": "73 68 6f 77 5f 6e 75 6d 62 65 72 2e 74 31 2e 74 78 74 3d 22 36 37 38 2b 39 30 31 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:37.736367+00:00", "monotonic_s": 1842.310265345, "kind": "message", "text": "任务码指令已发送：012+345 / 678+901，请观察屏幕。"}
+{"time_utc": "2026-10-28T15:17:37.737214+00:00", "monotonic_s": 1842.31109597, "kind": "tx", "command": "page result", "hex": "70 61 67 65 20 72 65 73 75 6c 74 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:38.138140+00:00", "monotonic_s": 1842.712036385, "kind": "tx", "command": "t4.txt=\"0\"", "hex": "74 34 2e 74 78 74 3d 22 30 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:38.238778+00:00", "monotonic_s": 1842.812668854, "kind": "tx", "command": "t5.txt=\"3\"", "hex": "74 35 2e 74 78 74 3d 22 33 22 ff ff ff"}
+{"time_utc": "2026-10-28T15:17:38.339296+00:00", "monotonic_s": 1842.913190698, "kind": "message", "text": "统计指令已发送：成功抓取数=0，成功放置数=3。"}
+{"time_utc": "2026-10-28T15:17:38.339617+00:00", "monotonic_s": 1842.913486448, "kind": "message", "text": "请观察结果页，任务码应保持不变；发送完成不代表实屏已验收。"}

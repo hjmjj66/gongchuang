@@ -41,6 +41,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetExecutorRuntime.srv"
   "srv/StopExecutor.srv"
   "srv/ResetExecutor.srv"
+  "srv/ConfigureMission.srv"
   "action/ScanRoads.action"
   "action/RunWorkBatch.action"
   DEPENDENCIES std_msgs action_msgs

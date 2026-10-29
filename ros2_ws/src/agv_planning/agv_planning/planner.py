@@ -28,6 +28,10 @@ class Opcode(IntEnum):
     STRAFE_LEFT_ONE_EDGE = 4
     STRAFE_RIGHT_ONE_EDGE = 5
     BACKWARD_ONE_EDGE = 6
+    DIAGONAL_FORWARD_LEFT = 7
+    DIAGONAL_FORWARD_RIGHT = 8
+    DIAGONAL_BACKWARD_LEFT = 9
+    DIAGONAL_BACKWARD_RIGHT = 10
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,22 @@ class Step:
     to_node: int
     distance_mm: int
     target_heading: str
+
+
+def parking_step(node: int, heading: str, maneuver: str, offset_mm: int) -> Step:
+    # Map y points down; enter node 1 towards upper-right, node 3 towards lower-right.
+    dx, dy = 1, -1 if node == 1 else 1
+    if maneuver == 'EXIT':
+        dx, dy = -dx, -dy
+    fx, fy = ((0, -1), (1, 0), (0, 1), (-1, 0))[HEADINGS.index(heading)]
+    forward, left = dx * fx + dy * fy, dx * fy - dy * fx
+    opcode = {
+        (1, 1): Opcode.DIAGONAL_FORWARD_LEFT,
+        (1, -1): Opcode.DIAGONAL_FORWARD_RIGHT,
+        (-1, 1): Opcode.DIAGONAL_BACKWARD_LEFT,
+        (-1, -1): Opcode.DIAGONAL_BACKWARD_RIGHT,
+    }[forward, left]
+    return Step(opcode, node, node, offset_mm, heading)
 
 
 def check_node(node: int) -> int:

@@ -18,7 +18,7 @@ from agv_interfaces.msg import (
     BlockedEdges, CBoardStatus, ControlCommand, Edge, FirstLayerRecord, MissionState, MissionTaskInfo,
     RouteControl, RouteExecutionStatus,
 )
-from agv_interfaces.srv import GetExecutorRuntime, PlanRoute, ResetExecutor, StopExecutor
+from agv_interfaces.srv import ConfigureMission, GetExecutorRuntime, PlanRoute, ResetExecutor, StopExecutor
 from agv_planning.planner import Topology
 
 from .clients import Clients
@@ -26,6 +26,7 @@ from .context import ActiveTask, MissionContext
 from .stages import LABELS, ROUTES, WORK, Stage, batch_spec, expected_steps
 from .state_machine import advance, commit_steps, pause, start
 from .task_code import parse_task_code
+from .screen_config import parse_screen_config
 
 
 class MissionNode(Node):
@@ -43,6 +44,11 @@ class MissionNode(Node):
         self.home = 1 if area == 'left' else 3
         self.finish_node = 1 if finish_area == 'left' else 3
         self.initial_heading = 'DOWN' if self.home == 1 else 'UP'
+        self.parking_offset_mm = self._param('parking_offset_mm', 200)
+        if type(self.parking_offset_mm) is not int or not 0 < self.parking_offset_mm <= 4294967295:
+            raise ValueError('parking_offset_mm must be a positive uint32 integer in mm')
+        self.screen_controlled = self._param('screen_controlled', False)
+        self._screen_start_at = None
         self.response_timeout = float(self._param('response_timeout_s', 5.0))
         self.init_timeout = float(self._param('initialization_timeout_s', 15.0))
         self.runtime_max_age = float(self._param('runtime_max_age_s', 1.0))
@@ -78,7 +84,8 @@ class MissionNode(Node):
         self._board_timeout = float(self._param('board_status_timeout_s', 0.2))
         if not math.isfinite(self._board_timeout) or self._board_timeout <= 0:
             raise ValueError('board_status_timeout_s must be finite and positive')
-        self.ctx = MissionContext(home_node=self.home)
+        self.ctx = MissionContext(home_node=self.home,
+                                  state='WAIT_SETUP' if self.screen_controlled else 'INITIALIZING')
         self.task_clients = Clients(self)
         self.runtime = {}
         self.sessions = {}
@@ -123,11 +130,15 @@ class MissionNode(Node):
             raise ValueError('MOCK route velocities must not be forwarded to /C/controll')
         self.command_services = [self.create_service(Trigger, '/mission/' + name, handler)
                          for name, handler in (('start', self._start), ('pause', self._pause), ('reset', self._reset))]
+        self.configure_service = self.create_service(
+            ConfigureMission, '/mission/configure_and_start', self._configure_and_start)
         self.timer = self.create_timer(0.05, self._tick)
         self.state_timer = self.create_timer(1.0 / rate, self._publish)
         self.control_timer = self.create_timer(1.0 / control_rate, self._maintain_control)
         self._stop_control()
         self._publish()
+        if self.screen_controlled:
+            self.get_logger().info('WAIT_SETUP：等待屏幕确认禁行路径和起终点')
 
     def _param(self, name, default):
         return self.declare_parameter(name, default, ParameterDescriptor(read_only=True)).value
@@ -290,6 +301,11 @@ class MissionNode(Node):
                         task.terminal_seen_at = now
                     elif now - task.terminal_seen_at > self.response_timeout:
                         self._fault('执行端已结束但Action结果未收到，未假定业务成功')
+        if self.ctx.state == 'READY' and self._screen_start_at is not None:
+            if time.monotonic() >= self._screen_start_at:
+                result = self._start(Trigger.Request(), Trigger.Response())
+                if not result.success:
+                    self._fault('屏幕启动未完成：' + result.message)
 
     def _runtime_result(self, key, runtime, issued_at):
         if key in self.runtime and issued_at < self.runtime[key][1]:
@@ -304,7 +320,7 @@ class MissionNode(Node):
             self.sessions[key] = runtime.executor_session_id
             raise ValueError(f'{key}执行节点中途重启，请人工恢复并复位')
         self.sessions[key] = runtime.executor_session_id
-        if self.ctx.state not in ('INITIALIZING', 'RESETTING') and runtime.run_id != self.ctx.run_id:
+        if self.ctx.state not in ('WAIT_SETUP', 'INITIALIZING', 'RESETTING') and runtime.run_id != self.ctx.run_id:
             raise ValueError(f'{key}本轮身份丢失或冲突')
         if key == 'route' and self.ctx.state == 'RUNNING':
             self.ctx.current_heading = runtime.current_heading
@@ -350,10 +366,12 @@ class MissionNode(Node):
             self.ctx.position_known = True
             self.ctx.current_heading = route.current_heading
             self.ctx.state = 'READY'
+            self.ctx.substate = 'WAIT_SCREEN_START' if self._screen_start_at is not None else ''
             self.ctx.quiescent = True
             self.ctx.reason = ''
+            next_step = '等待屏幕启动倒计时结束' if self._screen_start_at is not None else '人工恢复现场后调用start'
             self.get_logger().info(f'READY run={self.ctx.run_id} start={self.home} finish={self.finish_node} mode={self.mode} '
-                                   f'sources={self.expected_source}；人工恢复现场后调用start')
+                                   f'sources={self.expected_source}；{next_step}')
             self._publish()
 
     def _reset_result(self, key, response):
@@ -366,6 +384,8 @@ class MissionNode(Node):
 
     def _start(self, request, response):
         try:
+            if self._screen_start_at is not None and time.monotonic() < self._screen_start_at:
+                raise ValueError('屏幕 OK 后的 2 秒启动等待尚未结束')
             if self.ctx.state != 'READY' or not self.task_clients.ready() or not self._snapshots_ready():
                 raise ValueError('需要READY且所有执行端在线；暂停/故障后先复位')
             for key, (state, _) in self.runtime.items():
@@ -376,10 +396,42 @@ class MissionNode(Node):
             if not route.odometry_ready or not route.position_known or route.current_node != self.home:
                 raise ValueError('路线起点或里程反馈未就绪')
             start(self.ctx)
+            self._screen_start_at = None
             self._enter_pending = True
-            response.success, response.message = True, '开始已接受，先进行雷达扫描'
+            response.success, response.message = True, '开始已接受，先斜移离开启停区'
+            self.get_logger().info('比赛开始：先斜移离开启停区，再雷达扫描、前往二维码区')
         except ValueError as exc:
             response.message = str(exc)
+        self._publish()
+        return response
+
+    def _configure_and_start(self, request, response):
+        response.run_id = self.ctx.run_id
+        try:
+            if not self.screen_controlled or self.ctx.state != 'WAIT_SETUP':
+                raise ValueError('仅屏幕控制模式的 WAIT_SETUP 状态接受本轮配置；重测先复位')
+            if request.expected_run_id != self.ctx.run_id:
+                raise ValueError('屏幕配置不属于当前等待轮次')
+            home, finish, routes, edges = parse_screen_config(
+                request.start_zone, request.stop_zone, request.forbidden_routes)
+            self.home, self.finish_node = home, finish
+            self.initial_heading = 'DOWN' if home == 1 else 'UP'
+            self.ctx.home_node = home
+            self.ctx.manual_forbidden_routes = routes
+            self.ctx.manual_blocked_edges = edges
+            self.ctx.state = 'INITIALIZING'
+            self.ctx.substate = 'PREPARING_SCREEN_START'
+            self._screen_start_at = time.monotonic() + 2.0
+            self.init_started = time.monotonic()
+            self.reset_done.clear()
+            self.reset_ids.clear()
+            response.accepted = True
+            response.reason = '配置已接受；等待 2 秒且执行端就绪后开始比赛'
+            self.get_logger().info(
+                f'SCREEN_CONFIG start{request.start_zone}→节点{home} stop{request.stop_zone}→节点{finish} '
+                f'manual_routes={routes} manual_edges={edges}')
+        except ValueError as exc:
+            response.reason = str(exc)
         self._publish()
         return response
 
@@ -406,7 +458,9 @@ class MissionNode(Node):
         if not allowed or not stopped or mutations:
             response.message = '先暂停并等待所有动作停止、未知请求明确后才能复位'
             return response
-        self.ctx = MissionContext(home_node=self.home, state='RESETTING')
+        self.ctx = MissionContext(home_node=self.home,
+                                  state='WAIT_SETUP' if self.screen_controlled else 'RESETTING')
+        self._screen_start_at = None
         self._stop_control()
         self._route_control_sequence = 0
         self._route_control_wait_started = None
@@ -416,10 +470,13 @@ class MissionNode(Node):
         self._enter_pending = False
         self.init_started = time.monotonic()
         response.success, response.message = True, '软件复位已接受；请人工恢复车辆、物料及机构'
+        if self.screen_controlled:
+            response.message += '，然后在屏幕重新确认本轮配置'
         self._publish()
         return response
 
     def _fault(self, reason):
+        self._screen_start_at = None
         self._stop_control()
         if self.ctx.state != 'FAULT':
             self.get_logger().error('FAULT ' + reason)
@@ -477,7 +534,7 @@ class MissionNode(Node):
         c = self.ctx
         c.stage_started_at = time.monotonic()
         c.substate = 'ENTER'
-        self.get_logger().info(f'ENTER {int(c.stage):02d}/15 {c.stage.name} {LABELS[c.stage]}')
+        self.get_logger().info(f'ENTER stage={int(c.stage):02d} {c.stage.name} {LABELS[c.stage]}')
         try:
             if c.stage == Stage.READ_TASK_CODE:
                 c.substate = 'WAIT_QR'
@@ -487,10 +544,15 @@ class MissionNode(Node):
                 c.active = task
                 goal = ScanRoads.Goal(run_id=c.run_id, task_id=task.task_id)
                 self._send_action(self.task_clients.scan, goal, task)
-            elif int(c.stage) in ROUTES:
-                expected, goal_node = ROUTES[c.stage]
-                expected = self.home if expected is None else expected
-                goal_node = self.finish_node if goal_node is None else goal_node
+            elif int(c.stage) in ROUTES or c.stage in (Stage.EXIT_START_AREA, Stage.ENTER_FINISH_AREA):
+                maneuver = ''
+                if c.stage in (Stage.EXIT_START_AREA, Stage.ENTER_FINISH_AREA):
+                    maneuver = 'EXIT' if c.stage == Stage.EXIT_START_AREA else 'ENTER'
+                    expected = goal_node = self.home if maneuver == 'EXIT' else self.finish_node
+                else:
+                    expected, goal_node = ROUTES[c.stage]
+                    expected = self.home if expected is None else expected
+                    goal_node = self.finish_node if goal_node is None else goal_node
                 runtime = self.runtime['route'][0]
                 if not runtime.position_known or runtime.current_node != expected or runtime.busy:
                     raise ValueError('路线起点未确认或与阶段预期冲突')
@@ -501,7 +563,10 @@ class MissionNode(Node):
                 self._route_control_sequence = 0
                 self._route_control_wait_started = None
                 req = PlanRoute.Request(run_id=c.run_id, request_id=task.task_id, stage=int(c.stage),
-                                        start=0, goal=goal_node, align_at_goal=c.stage != Stage.RETURN_HOME)
+                                        start=0, goal=goal_node,
+                                        align_at_goal=not maneuver and c.stage != Stage.RETURN_HOME,
+                                        parking_maneuver=maneuver,
+                                        parking_offset_mm=self.parking_offset_mm if maneuver else 0)
                 c.substate = 'WAIT_ARRIVAL'
                 self._track('plan', self.task_clients.route.call_async(req),
                             lambda response: self._plan_result(task, response), mutation=True)
@@ -573,7 +638,11 @@ class MissionNode(Node):
         if task.kind == 'scan':
             if not r.map_revision:
                 raise ValueError('扫描地图版本无效')
-            c.blocked_edges = tuple(sorted(Topology().normalize_blocked((e.a, e.b) for e in r.blocked_edges)))
+            radar_edges = Topology().normalize_blocked((e.a, e.b) for e in r.blocked_edges)
+            c.blocked_edges = tuple(sorted(radar_edges | set(c.manual_blocked_edges)))
+            self.get_logger().info(
+                f'MAP_MERGED manual_routes={c.manual_forbidden_routes} '
+                f'radar_edges={sorted(radar_edges)} final_edges={c.blocked_edges}')
             c.map_revision = r.map_revision
             c.substate = 'WAIT_MAP'
             self._map_task = task.task_id
@@ -662,8 +731,9 @@ class MissionNode(Node):
         # The scanner releases its camera after one result. Retain a result that
         # arrives before READ_TASK_CODE so entering that stage cannot lose it.
         if (c.code is not None or c.pending_code is not None
-                or c.state not in ('INITIALIZING', 'RESETTING', 'READY', 'RUNNING')
-                or c.stage > Stage.READ_TASK_CODE):
+                or c.state not in ('WAIT_SETUP', 'INITIALIZING', 'RESETTING', 'READY', 'RUNNING')
+                or c.stage not in (Stage.EXIT_START_AREA, Stage.STARTUP_SCAN,
+                                    Stage.MOVE_TO_QR, Stage.READ_TASK_CODE)):
             return
         try:
             c.pending_code = parse_task_code(msg.data)
@@ -687,7 +757,7 @@ class MissionNode(Node):
         c = self.ctx
         self._stop_control()
         if c.state == 'RUNNING':
-            self.get_logger().info(f'DONE {int(c.stage):02d}/15 {c.stage.name} '
+            self.get_logger().info(f'DONE stage={int(c.stage):02d} {c.stage.name} '
                                    f'elapsed={time.monotonic() - c.stage_started_at:.2f}s')
         if advance(c):
             self._enter_pending = c.state == 'RUNNING'

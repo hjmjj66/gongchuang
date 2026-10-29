@@ -20,13 +20,15 @@ function selections() {
     $(id).value = (competition ? [1,3] : [1,2,3,4,5,6,7,8,9]).includes(old) ? old : (id === 'goal' && !competition ? 2 : 1);
   }
   $('align-row').hidden = competition;
-  $('mode-hint').textContent = competition ? '2 → 4 → 6 → 8 → 4 → 6 → 8 → 最终启停区。每次在工作方向停好后等待3秒，跳过扫码与抓放。' : '按所选起点、当前朝向及终点执行一次导航。未开启工作对齐时保持车头朝向。';
+  $('exit-start-row').hidden = competition;
+  $('mode-hint').textContent = competition ? '斜移出区 → 2 → 4 → 6 → 8 → 4 → 6 → 8 → 终点角点 → 斜移入区。两轴同时运动，距离读取比赛配置；工作区停好后等待3秒，跳过扫码与抓放。' : '按所选起点、当前朝向及终点导航；可选从启停区内先斜移到角点，再走完整路线。未开启工作对齐时保持车头朝向。';
   updateSettings();
 }
 
 function updateSettings() {
   if (mode === 'competition') $('heading').value = Number($('start').value) === 1 ? 'DOWN' : 'UP';
   if (![2,4,6,8].includes(Number($('goal').value))) $('align').checked = false;
+  if (![1,3].includes(Number($('start').value))) $('exit-start').checked = false;
   updateControls();
   if (!state || !['INITIALIZING','NAVIGATING','WAITING','STOPPING'].includes(state.state)) drawMarkers(Number($('start').value), Number($('goal').value));
 }
@@ -38,6 +40,7 @@ function updateControls() {
   for (const el of document.querySelectorAll('[data-mode],#start,#goal')) el.disabled = locked;
   $('heading').disabled = locked || mode === 'competition';
   $('align').disabled = locked || ![2,4,6,8].includes(Number($('goal').value));
+  $('exit-start').disabled = locked || mode === 'competition' || ![1,3].includes(Number($('start').value));
   $('start-button').disabled = !connected || locked || Boolean(state?.unresolved);
   $('reset-button').disabled = !connected || locked || Boolean(state?.unresolved);
   $('stop-button').disabled = !connected || !state || !['INITIALIZING','NAVIGATING','WAITING','READY'].includes(state.state);
@@ -45,7 +48,7 @@ function updateControls() {
 }
 
 function settings() {
-  return {mode, start:Number($('start').value), goal:Number($('goal').value), heading:$('heading').value, align:mode === 'free' && $('align').checked, blocked_edges:[]};
+  return {mode, start:Number($('start').value), goal:Number($('goal').value), heading:$('heading').value, align:mode === 'free' && $('align').checked, exit_start:mode === 'free' && $('exit-start').checked, blocked_edges:[]};
 }
 
 async function post(path, payload) {
@@ -101,7 +104,7 @@ function render(s) {
   $('route-count').textContent = s.route_count ? `${Math.min(s.route_index+1,s.route_count)} / ${s.route_count}` : '—';
   $('countdown').textContent = s.state === 'WAITING' ? `${s.wait_s.toFixed(1)} s` : '—';
   $('elapsed').textContent = `${(s.elapsed_s || 0).toFixed(1)} s`;
-  $('route').textContent = s.plan?.nodes?.length ? s.plan.nodes.join(' → ') : (s.goal ? `目标节点 ${s.goal}` : '—');
+  $('route').textContent = s.parking_maneuver ? `${s.parking_maneuver === 'EXIT' ? '斜移出区' : '斜移入区'} · 每轴 ${s.parking_offset_mm} mm` : (s.plan?.nodes?.length ? s.plan.nodes.join(' → ') : (s.goal ? `目标节点 ${s.goal}` : '—'));
   const o = s.odometry;
   $('distance').textContent = o ? `x ${o.x_m.toFixed(3)} / y ${o.y_m.toFixed(3)} m` : '—';
   $('actual-speed').textContent = o ? `${o.vx_mps.toFixed(3)} / ${o.vy_mps.toFixed(3)} m/s / ${o.wz_rad_s.toFixed(3)} rad/s` : '—';
@@ -117,10 +120,10 @@ function render(s) {
   $('board-reason').textContent = b.fault_reason || (fresh ? '运动许可不等同于物理停稳确认' : '等待新鲜C板反馈');
   if (s.config) {
     const c = s.config;
-    $('config-values').textContent = `平移 ${c.translation_fast_mps} / ${c.translation_slow_mps} m/s；转向 ${c.turn_fast_deg_s} / ${c.turn_slow_deg_s}°/s（快速 / 慢速）。`;
-    $('config-path').textContent = c.source;
+    $('config-values').textContent = `平移 ${c.translation_fast_mps} / ${c.translation_slow_mps} m/s；转向 ${c.turn_fast_deg_s} / ${c.turn_slow_deg_s}°/s（快速 / 慢速）；出入区斜移每轴 ${c.parking_offset_mm} mm。`;
+    $('config-path').textContent = `${c.source}\n斜移参数：${c.mission_source}`;
   }
-  $('planned').setAttribute('points',s.plan?.nodes?.map(n => anchors[n].join(',')).join(' ') || '');
+  $('planned').setAttribute('points',s.plan?.display_points?.map(p => p.join(',')).join(' ') || s.plan?.nodes?.map(n => anchors[n].join(',')).join(' ') || '');
   $('trace').setAttribute('points',s.trace?.map(p => p.join(',')).join(' ') || '');
   if (s.pose) {
     $('car').setAttribute('visibility','visible');

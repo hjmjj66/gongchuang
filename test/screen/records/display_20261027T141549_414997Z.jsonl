@@ -1,0 +1,6 @@
+{"time_utc": "2026-10-27T14:15:49.417404+00:00", "monotonic_s": 3628.270261237, "kind": "start", "port": "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0", "baud": 4800, "write": false, "layout": "split", "controls": ["t0", "t1"], "target": "156+123+516+231"}
+{"time_utc": "2026-10-27T14:15:49.721908+00:00", "monotonic_s": 3628.57475796, "kind": "tx", "command": "", "hex": "ff ff ff"}
+{"time_utc": "2026-10-27T14:15:49.888556+00:00", "monotonic_s": 3628.74144513, "kind": "tx", "command": "connect", "hex": "63 6f 6e 6e 65 63 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:15:50.933279+00:00", "monotonic_s": 3629.786170075, "kind": "tx", "command": "get t0.txt", "hex": "67 65 74 20 74 30 2e 74 78 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:15:51.571366+00:00", "monotonic_s": 3630.42425572, "kind": "tx", "command": "get t1.txt", "hex": "67 65 74 20 74 31 2e 74 78 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:15:52.211706+00:00", "monotonic_s": 3631.064594914, "kind": "result", "status": "NO_SCREEN_RESPONSE"}

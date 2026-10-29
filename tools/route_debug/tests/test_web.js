@@ -41,17 +41,32 @@ vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8'),con
 assert.equal(Number(elements.start.value),1);
 assert.equal(Number(elements.goal.value),2);
 assert.equal(elements.heading.disabled,false);
+assert.equal(elements['exit-start-row'].hidden,false);
+assert.equal(elements['exit-start'].checked,false);
+assert.equal(elements['exit-start'].disabled,false);
+elements['exit-start'].checked = true;
+assert.equal(vm.runInContext('settings().exit_start',context),true);
 modes[1].handlers.click();
 assert.equal(elements.start.children.length,2);
 assert.equal(elements.goal.children.length,2);
 assert.equal(elements.heading.disabled,true);
 assert.equal(elements['align-row'].hidden,true);
+assert.equal(elements['exit-start-row'].hidden,true);
+assert.equal(vm.runInContext('settings().exit_start',context),false);
 elements.start.value = '3';
 elements.start.handlers.change();
 assert.equal(elements.heading.value,'UP');
 modes[0].handlers.click();
 assert.equal(elements.start.children.length,9);
 assert.equal(elements['align-row'].hidden,false);
+assert.equal(elements['exit-start-row'].hidden,false);
+elements.start.value = '7';
+elements.start.handlers.change();
+assert.equal(elements['exit-start'].checked,false);
+assert.equal(elements['exit-start'].disabled,true);
+elements.start.value = '1';
+elements.start.handlers.change();
+assert.equal(elements['exit-start'].disabled,false);
 elements.goal.value = '7';
 elements.align.checked = true;
 elements.goal.handlers.change();
@@ -68,13 +83,25 @@ const snapshot = {state:'NAVIGATING',reason:'导航测试',owner,
   board:{connected:true,status_valid:true,pc_control:true,odometry_valid:true,motion_allowed:true},
   plan:{nodes:[7,8,9]},pose:{x:180,y:300,angle:225,edge:[7,8],valid:true},
   trace:[[180,141],[180,300]],events:[{time:'12:00:00',message:'正在导航'}],
-  config:{translation_fast_mps:1,translation_slow_mps:.5,turn_fast_deg_s:60,turn_slow_deg_s:30,source:'/test/planner.yaml'},operations:[]};
+  config:{translation_fast_mps:1,translation_slow_mps:.5,turn_fast_deg_s:60,turn_slow_deg_s:30,
+    source:'/test/planner.yaml',mission_source:'/test/mission.yaml',parking_offset_mm:275},operations:[]};
 context.streamRef.onmessage({data:JSON.stringify(snapshot)});
 assert.equal(elements.start.disabled,true);
+assert.equal(elements['exit-start'].disabled,true);
 assert.equal(elements['stop-button'].disabled,false);
 assert.equal(elements['planned'].attributes.points,'180,141 180,482 180,800');
 assert.equal(elements['car'].attributes.transform,'translate(180 300) rotate(225)');
 assert.equal(elements['route'].textContent,'7 → 8 → 9');
+snapshot.parking_maneuver = 'EXIT'; snapshot.parking_offset_mm = 275;
+snapshot.plan = {nodes:[3],display_points:[[850,850],[821,800]]};
+context.streamRef.onmessage({data:JSON.stringify(snapshot)});
+assert.equal(elements['route'].textContent,'斜移出区 · 每轴 275 mm');
+assert.equal(elements['planned'].attributes.points,'850,850 821,800');
+assert.ok(elements['config-values'].textContent.includes('每轴 275 mm'));
+assert.ok(elements['config-path'].textContent.includes('/test/mission.yaml'));
+snapshot.parking_maneuver = 'ENTER';
+context.streamRef.onmessage({data:JSON.stringify(snapshot)});
+assert.equal(elements['route'].textContent,'斜移入区 · 每轴 275 mm');
 snapshot.state = 'FAULT'; snapshot.unresolved = true; snapshot.pose.valid = false;
 snapshot.reason = '停止未确认';
 context.streamRef.onmessage({data:JSON.stringify(snapshot)});

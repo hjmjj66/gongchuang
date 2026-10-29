@@ -20,6 +20,9 @@ class Stage(IntEnum):
     MOVE_TO_STORAGE_2 = 13
     STORAGE_STACK_2 = 14
     RETURN_HOME = 15
+    # Keep existing work-stage IDs stable for external executors.
+    EXIT_START_AREA = 16
+    ENTER_FINISH_AREA = 17
 
 
 LABELS = (
@@ -28,6 +31,7 @@ LABELS = (
     '粗加工区→暂存区', '第一批暂存平放', '暂存区→原料区',
     '第二批原料取料', '原料区→粗加工区', '第二批粗加工三放三取',
     '粗加工区→暂存区', '第二批同色码垛', '返回启停区',
+    '斜移离开启停区', '斜移进入结束启停区',
 )
 ROUTES = {1: (None, 2), 3: (2, 4), 5: (4, 6), 7: (6, 8),
           9: (8, 4), 11: (4, 6), 13: (6, 8), 15: (8, None)}

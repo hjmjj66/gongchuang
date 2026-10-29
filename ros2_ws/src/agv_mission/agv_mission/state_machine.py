@@ -11,7 +11,7 @@ def start(context):
     context.state = 'RUNNING'
     context.quiescent = False
     context.started_at = time.monotonic()
-    context.stage = Stage.STARTUP_SCAN
+    context.stage = Stage.EXIT_START_AREA
 
 
 def pause(context):
@@ -28,12 +28,14 @@ def advance(context):
     if context.state != 'RUNNING':
         return False
     context.active = None
-    if context.stage == Stage.RETURN_HOME:
+    if context.stage == Stage.ENTER_FINISH_AREA:
         context.state = 'FINISHED'
         context.quiescent = True
         context.finished_at = time.monotonic()
     else:
-        context.stage = Stage(context.stage + 1)
+        context.stage = (Stage.STARTUP_SCAN if context.stage == Stage.EXIT_START_AREA else
+                         Stage.ENTER_FINISH_AREA if context.stage == Stage.RETURN_HOME else
+                         Stage(context.stage + 1))
         context.substate = 'ENTER'
     return True
 

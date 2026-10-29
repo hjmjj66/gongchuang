@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 
 from .map_view import measured_pose, pose_at
 
-HEADINGS = {2: 'RIGHT', 4: 'UP', 6: 'DOWN', 8: 'LEFT'}
+# Map headings of the vehicle front: QR faces +vy; material stations face -vy.
+HEADINGS = {2: 'DOWN', 4: 'LEFT', 6: 'RIGHT', 8: 'DOWN'}
 BUSY = {'INITIALIZING', 'NAVIGATING', 'WAITING', 'STOPPING'}
 LABELS = ['扫码等待', '第一批取料等待', '第一批粗加工等待', '第一批暂存等待',
           '第二批取料等待', '第二批粗加工等待', '第二批码垛等待']
@@ -34,12 +35,21 @@ def settings_from(raw):
     align = raw.get('align', False)
     if not isinstance(align, bool) or (align and mode == 'free' and goal not in HEADINGS):
         raise ValueError('只有工作区终点允许作业对齐')
-    return dict(mode=mode, start=start, goal=goal, heading=heading, align=align)
+    exit_start = raw.get('exit_start', False)
+    if not isinstance(exit_start, bool):
+        raise ValueError('起步斜移开关必须为布尔值')
+    if mode == 'competition':
+        exit_start = True
+    elif exit_start and start not in (1, 3):
+        raise ValueError('起步斜移仅支持启停区节点1或3')
+    return dict(mode=mode, start=start, goal=goal, heading=heading, align=align,
+                exit_start=exit_start)
 
 
 class Session:
-    def __init__(self, io, config, lengths, clock=time.monotonic):
+    def __init__(self, io, config, lengths, clock=time.monotonic, parking_offset_mm=200):
         self.io, self.cfg, self.lengths, self.clock = io, config, lengths, clock
+        self.parking_offset_mm = parking_offset_mm
         self.state, self.reason, self.phase = 'IDLE', '', ''
         self.run_id = self.executor_id = self.owner = ''
         self.settings = None
@@ -129,8 +139,16 @@ class Session:
         self.request_id, self.accepted, self.plan = '', False, None
         self.trace.clear()
         self.pose = None
-        self.routes = ([2, 4, 6, 8, 4, 6, 8, settings['goal']]
-                       if settings['mode'] == 'competition' else [settings['goal']])
+        if settings['mode'] == 'competition':
+            self.routes = [dict(goal=settings['start'], maneuver='EXIT', wait='')]
+            self.routes += [dict(goal=goal, maneuver='', wait=label)
+                            for goal, label in zip((2, 4, 6, 8, 4, 6, 8), LABELS)]
+            self.routes += [dict(goal=settings['goal'], maneuver='', wait=''),
+                            dict(goal=settings['goal'], maneuver='ENTER', wait='')]
+        else:
+            self.routes = [dict(goal=settings['goal'], maneuver='', wait='')]
+            if settings['exit_start']:
+                self.routes.insert(0, dict(goal=settings['start'], maneuver='EXIT', wait=''))
         self.route_index = 0
         self.started_at, self.finished_at = None, None
         self.deadline = self.clock() + self.cfg['initialization_timeout_s']
@@ -220,7 +238,8 @@ class Session:
             self.anchor = dict(odom)
         if self.anchor is not None and self.settings:
             self.pose = measured_pose(odom, self.anchor, self.settings['start'],
-                                      self.settings['heading'], self.lengths)
+                                      self.settings['heading'], self.lengths,
+                                      self.parking_offset_mm if self.settings['exit_start'] else 0)
             point = [self.pose['x'], self.pose['y']]
             if not self.trace or math.dist(point, self.trace[-1]) >= 1.:
                 self.trace.append(point)
@@ -232,12 +251,18 @@ class Session:
         self.accepted, self.sequence, self.plan = False, 0, None
         self.terminal = None
         self.control_at = self.clock()
-        goal = self.routes[self.route_index]
-        align = self.settings['mode'] == 'competition' and self.route_index < 7 or self.settings['mode'] == 'free' and self.settings['align']
-        self._state('NAVIGATING', f'导航 {self.route_index + 1}/{len(self.routes)} → 节点{goal}')
+        route = self.routes[self.route_index]
+        goal, maneuver = route['goal'], route['maneuver']
+        align = not maneuver and (bool(route['wait']) or
+                                  self.settings['mode'] == 'free' and self.settings['align'])
+        description = (f'斜移出区 → 节点{goal}角点' if maneuver == 'EXIT' else
+                       f'斜移入区 → 节点{goal}启停区' if maneuver == 'ENTER' else f'→ 节点{goal}')
+        self.segment = None
+        self._state('NAVIGATING', f'导航 {self.route_index + 1}/{len(self.routes)} {description}')
         self._call('plan', dict(run_id=self.run_id, request_id=self.request_id,
                    stage=0, start=0, goal=goal, current_heading='', align_at_goal=align,
-                   goal_heading=HEADINGS[goal] if align else ''), self._planned)
+                   goal_heading=HEADINGS[goal] if align else '', parking_maneuver=maneuver,
+                   parking_offset_mm=self.parking_offset_mm if maneuver else 0), self._planned)
 
     def _planned(self, result):
         plan = result['plan']
@@ -247,6 +272,13 @@ class Session:
             self.stop('规划失败：' + plan['reason'], fault=True)
         else:
             self.plan, self.accepted, self.control_at = plan, True, self.clock()
+            route = self.routes[self.route_index]
+            if route['maneuver']:
+                origin = dict(x_m=0., y_m=0., yaw_rad=0., yaw_deg=0., valid=True)
+                offsets = (self.parking_offset_mm, 0) if route['maneuver'] == 'EXIT' else (0, self.parking_offset_mm)
+                points = [measured_pose(origin, origin, route['goal'], 'RIGHT', self.lengths, offset)
+                          for offset in offsets]
+                plan['display_points'] = [[point['x'], point['y']] for point in points]
             if self.terminal:
                 self._terminal(*self.terminal)
 
@@ -287,7 +319,8 @@ class Session:
 
     def _verify_completion(self, result):
         rt = result['runtime']
-        goal = self.routes[self.route_index]
+        route = self.routes[self.route_index]
+        goal = route['goal']
         expected_heading = self.plan['end_heading']
         if not (rt['run_id'] == self.run_id and rt['executor_session_id'] == self.executor_id
                 and rt['last_task_id'] == self.request_id and rt['last_state'] == 'COMPLETED'
@@ -298,9 +331,12 @@ class Session:
             return
         self._zero()
         self.phase = ''
-        if self.settings['mode'] == 'competition' and self.route_index < 7:
+        if route['wait']:
             self.wait_until = self.clock() + self.cfg['wait_s']
-            self._state('WAITING', LABELS[self.route_index])
+            self._state('WAITING', route['wait'])
+        elif self.route_index + 1 < len(self.routes):
+            self.route_index += 1
+            self._dispatch()
         else:
             self.finished_at = self.clock()
             self._state('FINISHED', '路线演练完成；底盘输出已归零')
@@ -417,7 +453,9 @@ class Session:
         return dict(state=self.state, reason=self.reason, phase=self.phase,
                     owner=self.owner, settings=self.settings, run_id=self.run_id,
                     route_index=self.route_index, route_count=len(self.routes),
-                    goal=self.routes[self.route_index] if self.routes else None,
+                    goal=self.routes[self.route_index]['goal'] if self.routes else None,
+                    parking_maneuver=self.routes[self.route_index]['maneuver'] if self.routes else '',
+                    parking_offset_mm=self.parking_offset_mm,
                     plan=self.plan, pose=self.pose, trace=list(self.trace),
                     events=list(self.events), board=self.board,
                     board_fresh=now - self.board_at < self.cfg['status_timeout_s'],

@@ -1,6 +1,6 @@
 string run_id
 string request_id
-# 0 means standalone debugging; 1..15 are mission stages.
+# 0: debug/startup scan; 1..15: existing mission stages; 16: startup exit; 17: finish entry.
 uint8 stage
 int32 start
 int32 goal

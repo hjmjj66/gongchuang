@@ -21,8 +21,8 @@ def setup(context):
         name='route_planner_node', output='screen',
         parameters=[get('planner_config'), {'debug_allow_any_pose': True,
                     'debug_publish_progress': True,
-                    'work_heading.node_2': 'RIGHT', 'work_heading.node_4': 'UP',
-                    'work_heading.node_6': 'DOWN', 'work_heading.node_8': 'LEFT',
+                    'work_heading.node_2': 'DOWN', 'work_heading.node_4': 'LEFT',
+                    'work_heading.node_6': 'RIGHT', 'work_heading.node_8': 'DOWN',
                     'plan_service': PREFIX + '/plan', 'route_topic': PREFIX + '/path',
                     'control_topic': PREFIX + '/control', 'execution_status_topic': PREFIX + '/status',
                     'blocked_edges_topic': PREFIX + '/map', 'odometry_topic': '/C/odometry',
@@ -38,7 +38,8 @@ def setup(context):
                  name='cboard_bridge_node', parameters=board_params, output='screen')
     env = {'PYTHONPATH': str(TOOL) + os.pathsep + os.environ.get('PYTHONPATH', '')}
     controller_cmd = ['/usr/bin/python3', '-m', 'route_debug.node',
-                      '--planner-config', get('planner_config'), '--debug-config', get('debug_config')]
+                      '--planner-config', get('planner_config'), '--debug-config', get('debug_config'),
+                      '--mission-config', get('mission_config')]
     for name in ('host', 'port'):
         if get(name):
             controller_cmd.extend(['--' + name, get(name)])
@@ -52,6 +53,7 @@ def setup(context):
 
 def generate_launch_description():
     defaults = dict(planner_config=str(ROOT / 'ros2_ws/src/agv_planning/config/planner.yaml'),
+                    mission_config=str(ROOT / 'ros2_ws/src/agv_mission/config/mission.yaml'),
                     cboard_config=str(ROOT / 'ros2_ws/src/agv_cboard/config/cboard.yaml'),
                     debug_config=str(TOOL / 'config/debug.yaml'),
                     serial_port='', host='', port='')

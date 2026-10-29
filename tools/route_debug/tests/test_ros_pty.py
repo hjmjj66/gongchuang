@@ -101,6 +101,10 @@ class RosPtyTests(unittest.TestCase):
                           turn_arrival_tolerance_deg=1., odometry_timeout_s=.5)
             planner_file = directory / 'planner.yaml'
             planner_file.write_text(yaml.safe_dump(planner))
+            mission = yaml.safe_load((ROOT / 'ros2_ws/src/agv_mission/config/mission.yaml').read_text())
+            mission['mission_node']['ros__parameters']['parking_offset_mm'] = 275
+            mission_file = directory / 'mission.yaml'
+            mission_file.write_text(yaml.safe_dump(mission))
             with socket.socket() as port_socket:
                 port_socket.bind(('127.0.0.1', 0))
                 port = port_socket.getsockname()[1]
@@ -157,10 +161,13 @@ class RosPtyTests(unittest.TestCase):
                 board.start()
                 env = dict(os.environ, ROS_LOG_DIR=str(directory / 'ros_logs'))
                 process = subprocess.Popen([str(TOOL / 'start.sh'), 'host:=127.0.0.1', f'port:={port}',
-                    f'serial_port:={board.path}', f'planner_config:={planner_file}'],
+                    f'serial_port:={board.path}', f'planner_config:={planner_file}',
+                    f'mission_config:={mission_file}'],
                     env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 initial = wait_for(lambda s: s.get('preflight_reason') == '', 15)
                 self.assertEqual(initial['config']['translation_fast_mps'], .5)
+                self.assertEqual(initial['config']['parking_offset_mm'], 275)
+                self.assertEqual(initial['config']['mission_source'], str(mission_file))
                 heartbeat_thread.start()
                 with urlopen(base + '/', timeout=2) as response:
                     self.assertIn('路线与底盘调试', response.read().decode())
@@ -178,6 +185,30 @@ class RosPtyTests(unittest.TestCase):
                 for vx, vy, wz, mode in moving:
                     self.assertGreater(vx, 0.)
                     self.assertEqual((vy, wz), (0., 0.))
+                # Optional free-mode exits honor the selected heading, then align only at node 2.
+                for start, heading, sx, sy in ((1, 'RIGHT', -1, -1), (3, 'LEFT', 1, -1)):
+                    frame_start = len(board.frames)
+                    command('start', dict(mode='free', start=start, goal=2, heading=heading,
+                                          align=True, exit_start=True))
+                    exiting = wait_for(lambda s: s['state'] == 'NAVIGATING' and
+                                       s['parking_maneuver'] == 'EXIT' and s['plan'])
+                    self.assertEqual(exiting['route_count'], 2)
+                    self.assertEqual(exiting['plan']['nodes'], [start])
+                    self.assertEqual(exiting['plan']['start_heading'], heading)
+                    self.assertEqual(exiting['plan']['end_heading'], heading)
+                    self.assertEqual(exiting['plan']['actions'][0]['distance_mm'], 275)
+                    finished = wait_for(lambda s: s['state'] in ('FINISHED', 'FAULT'), 12)
+                    self.assertEqual(finished['state'], 'FINISHED', finished)
+                    self.assertEqual(finished['route_index'], 1)
+                    self.assertEqual(finished['parking_maneuver'], '')
+                    self.assertEqual(finished['plan']['nodes'], [start, 2])
+                    self.assertEqual(finished['plan']['end_heading'], 'DOWN')
+                    self.assertEqual(finished['command'], [0., 0., 0.])
+                    diagonal = [cmd for _, cmd in board.frames[frame_start:]
+                                if cmd[3] == 1 and cmd[0] != 0. and cmd[1] != 0.]
+                    self.assertTrue(diagonal)
+                    self.assertTrue(all(vx * sx > 0. and vy * sy > 0. and wz == 0.
+                                        for vx, vy, wz, _ in diagonal))
                 free = dict(mode='free', start=7, goal=9, heading='LEFT', align=False)
                 command('start', free)
                 finished = wait_for(lambda s: s['state'] in ('FINISHED', 'FAULT'), 10)
@@ -187,14 +218,31 @@ class RosPtyTests(unittest.TestCase):
                 self.assertTrue(any(frame[1][3] == 1 for frame in board.frames))
                 # Full run preserves the real three-second waits.
                 race = dict(mode='competition', start=3, goal=1, heading='UP', align=False)
+                frame_start = len(board.frames)
                 command('start', race)
+                exiting = wait_for(lambda s: s['state'] == 'NAVIGATING' and
+                                   s['parking_maneuver'] == 'EXIT' and s['plan'])
+                self.assertEqual(exiting['route_index'], 0)
+                self.assertEqual(exiting['route_count'], 10)
+                self.assertEqual(exiting['plan']['nodes'], [3])
+                self.assertEqual(exiting['plan']['actions'][0]['distance_mm'], 275)
+                self.assertEqual(exiting['plan']['actions'][0]['opcode'], 7)
+                self.assertEqual(len(exiting['plan']['display_points']), 2)
                 finished = wait_for(lambda s: s['state'] in ('FINISHED', 'FAULT'), 55)
                 self.assertEqual(finished['state'], 'FINISHED', finished)
-                self.assertEqual(finished['route_index'], 7)
+                self.assertEqual(finished['route_index'], 9)
                 waits = [event for event in finished['events'] if '等待' in event['message']]
                 self.assertEqual(len(waits), 7)
                 self.assertGreaterEqual(finished['elapsed_s'], 21)
                 self.assertEqual(finished['plan']['goal'], 1)
+                self.assertEqual(finished['plan']['nodes'], [1])
+                self.assertEqual(finished['plan']['actions'][0]['opcode'], 9)
+                self.assertEqual(finished['plan']['actions'][0]['distance_mm'], 275)
+                self.assertEqual(finished['parking_maneuver'], 'ENTER')
+                diagonal = [cmd for _, cmd in board.frames[frame_start:]
+                            if cmd[3] == 1 and cmd[0] != 0. and cmd[1] != 0.]
+                self.assertTrue(any(vx > 0. and vy > 0. and wz == 0. for vx, vy, wz, _ in diagonal))
+                self.assertTrue(any(vx < 0. and vy > 0. and wz == 0. for vx, vy, wz, _ in diagonal))
                 self.assertEqual(finished['command'], [0.,0.,0.])
                 # New run, stop while waiting, reset, and execute zero-distance alignment.
                 command('start', race)
@@ -207,7 +255,7 @@ class RosPtyTests(unittest.TestCase):
                 command('start', same)
                 finished = wait_for(lambda s: s['state'] in ('FINISHED', 'FAULT'))
                 self.assertEqual(finished['state'], 'FINISHED', finished)
-                self.assertEqual(finished['plan']['end_heading'], 'RIGHT')
+                self.assertEqual(finished['plan']['end_heading'], 'DOWN')
                 # Feedback interruption terminates the task; bridge health recovers automatically.
                 command('start', race)
                 wait_for(lambda s: s['state'] == 'WAITING', 8)

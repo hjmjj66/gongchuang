@@ -55,7 +55,7 @@ class IO:
 class SessionTests(unittest.TestCase):
     def setUp(self):
         self.io, self.clock = IO(), Clock()
-        self.s = Session(self.io, CONFIG, {}, self.clock)
+        self.s = Session(self.io, CONFIG, {}, self.clock, parking_offset_mm=275)
         self.rt = dict(run_id='', executor_session_id='planner-1', busy=False,
                        quiescent=True, motion_released=True, source='REAL',
                        config_ready=True, map_ready=False, map_revision=0,
@@ -74,8 +74,9 @@ class SessionTests(unittest.TestCase):
         self.s.update_runtime(self.rt)
         self.s.heartbeat('browser-one')
 
-    def begin(self, mode='free', start=1, goal=2, heading='DOWN', align=False):
-        self.s.command('start', dict(mode=mode, start=start, goal=goal, heading=heading, align=align), 'browser-one')
+    def begin(self, mode='free', start=1, goal=2, heading='DOWN', align=False, exit_start=False):
+        self.s.command('start', dict(mode=mode, start=start, goal=goal, heading=heading,
+                                     align=align, exit_start=exit_start), 'browser-one')
         self.io.reply('get_runtime', {'runtime': self.rt})
         payload = self.io.calls[-1][1]
         self.assertEqual(payload['home_node'], start)
@@ -121,18 +122,73 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.s.state, 'FINISHED')
         self.assertTrue(all(cmd == (0., 0., 0.) for cmd in self.io.commands))
 
+    def test_free_optional_exit_preserves_heading_and_aligns_only_at_destination(self):
+        for node in (1, 3):
+            for heading in ('UP', 'RIGHT', 'DOWN', 'LEFT'):
+                with self.subTest(node=node, heading=heading):
+                    self.setUp()
+                    self.begin(start=node, goal=2, heading=heading, align=True, exit_start=True)
+                    self.assertEqual(self.s.snapshot()['route_count'], 2)
+                    request = next(c[1] for c in self.io.calls if c[0] == 'plan')
+                    self.assertEqual(request['parking_maneuver'], 'EXIT')
+                    self.assertEqual(request['goal'], node)
+                    self.assertEqual(request['parking_offset_mm'], 275)
+                    self.assertFalse(request['align_at_goal'])
+                    self.complete()
+                    self.assertEqual(self.s.state, 'NAVIGATING')
+                    self.assertEqual(self.rt['current_heading'], heading)
+                    request = next(c[1] for c in self.io.calls if c[0] == 'plan')
+                    self.assertEqual(request['parking_maneuver'], '')
+                    self.assertEqual(request['goal'], 2)
+                    self.assertTrue(request['align_at_goal'])
+                    self.assertEqual(request['goal_heading'], 'DOWN')
+                    self.complete()
+                    self.assertEqual(self.s.state, 'FINISHED')
+                    self.assertFalse(self.io.calls)
+
+    def test_free_exit_disabled_and_same_zone_goal(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                self.setUp()
+                self.begin(start=1, goal=1, exit_start=enabled)
+                if enabled:
+                    self.complete()
+                    self.assertEqual(self.s.state, 'NAVIGATING')
+                request = next(c[1] for c in self.io.calls if c[0] == 'plan')
+                self.assertEqual(request['parking_maneuver'], '')
+                self.complete()
+                self.assertEqual(self.s.state, 'FINISHED')
+                self.assertFalse(self.io.calls)
+
+    def test_free_exit_settings_validation(self):
+        for raw in (dict(start=2, goal=4, exit_start=True),
+                    dict(start=1, goal=2, exit_start=1),
+                    dict(start=3, goal=2, exit_start='true')):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                settings_from(raw)
+        self.assertFalse(settings_from(dict(start=1, goal=2))['exit_start'])
+        self.assertTrue(settings_from(dict(mode='competition', start=1, goal=3,
+                                           exit_start=False))['exit_start'])
+
     def test_four_competition_combinations_and_exact_seven_waits(self):
         for start in (1, 3):
             for goal in (1, 3):
                 with self.subTest(start=start, goal=goal):
                     self.setUp()
                     self.begin(mode='competition', start=start, goal=goal)
-                    for index, target in enumerate([2, 4, 6, 8, 4, 6, 8, goal]):
+                    for index, target in enumerate([start, 2, 4, 6, 8, 4, 6, 8, goal, goal]):
                         req = next(c[1] for c in self.io.calls if c[0] == 'plan')
                         self.assertEqual(req['goal'], target)
-                        self.assertEqual(req['align_at_goal'], index < 7)
+                        working = 1 <= index <= 7
+                        self.assertEqual(req['align_at_goal'], working)
+                        self.assertEqual(req['goal_heading'],
+                                         {2: 'DOWN', 4: 'LEFT', 6: 'RIGHT', 8: 'DOWN'}[target]
+                                         if working else '')
+                        self.assertEqual(req['parking_maneuver'],
+                                         'EXIT' if index == 0 else 'ENTER' if index == 9 else '')
+                        self.assertEqual(req['parking_offset_mm'], 275 if index in (0, 9) else 0)
                         self.complete()
-                        if index < 7:
+                        if working:
                             self.assertEqual(self.s.state, 'WAITING')
                             self.clock.now += 2.99
                             self.refresh()
@@ -142,11 +198,18 @@ class SessionTests(unittest.TestCase):
                             self.refresh()
                             self.s.tick()
                             self.assertEqual(self.s.state, 'NAVIGATING')
+                        elif index < 9:
+                            self.assertEqual(self.s.state, 'NAVIGATING')
                     self.assertEqual(self.s.state, 'FINISHED')
+                    self.assertEqual(self.s.snapshot()['route_count'], 10)
+                    self.assertEqual(self.s.snapshot()['parking_maneuver'], 'ENTER')
+                    self.assertEqual(sum('等待' in e['message'] for e in self.s.events), 7)
 
     def test_stopping_during_wait_never_dispatches_next_route(self):
         self.begin(mode='competition', goal=1)
+        self.complete()  # Startup exit has no work wait.
         self.complete()
+        self.assertEqual(self.s.state, 'WAITING')
         self.s.stop('用户停止')
         self.io.reply('get_runtime', {'runtime': self.rt})
         self.assertEqual(self.s.state, 'STOPPED')
@@ -238,6 +301,58 @@ class SessionTests(unittest.TestCase):
     def test_future_sealing_rejects_nonempty_blocked_edges(self):
         with self.assertRaisesRegex(ValueError, '封路'):
             settings_from(dict(start=1, goal=2, blocked_edges=[[1,2]]))
+
+    def test_parking_stop_never_dispatches_next_route(self):
+        for final in (False, True):
+            with self.subTest(final=final):
+                self.setUp()
+                self.begin(mode='competition', goal=3)
+                if final:
+                    for _ in range(9):
+                        self.complete()
+                        if self.s.state == 'WAITING':
+                            self.clock.now += 3.01
+                            self.refresh()
+                            self.s.tick()
+                self.plan()
+                self.s.stop('停止斜移')
+                self.io.reply('get_runtime', {'runtime': self.rt})
+                self.clock.now += 5
+                self.refresh()
+                self.s.tick()
+                self.assertEqual(self.s.state, 'STOPPED')
+                self.assertFalse(any(c[0] == 'plan' for c in self.io.calls))
+                self.assertEqual(self.io.commands[-1], (0., 0., 0.))
+
+    def test_competition_trace_starts_inside_and_exits_to_corner(self):
+        for node, heading, left in ((1, 'DOWN', -.275), (3, 'UP', .275)):
+            with self.subTest(node=node):
+                self.setUp()
+                self.begin(mode='competition', start=node, goal=node)
+                start = self.s.pose.copy()
+                self.assertGreater(start['x'], 821.)
+                self.assertGreater((start['y'] - (141 if node == 1 else 800)) * (-1 if node == 1 else 1), 0.)
+                self.s.update_odom(dict(self.s.odom, x_m=.275, y_m=left))
+                self.assertAlmostEqual(self.s.pose['x'], 821.)
+                self.assertAlmostEqual(self.s.pose['y'], 141 if node == 1 else 800)
+                self.plan()
+                points = self.s.plan['display_points']
+                self.assertAlmostEqual(points[0][0], start['x'])
+                self.assertAlmostEqual(points[0][1], start['y'])
+                self.assertAlmostEqual(points[1][0], self.s.pose['x'])
+                self.assertAlmostEqual(points[1][1], self.s.pose['y'])
+
+    def test_free_exit_trace_uses_zone_offset_only_when_enabled(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                self.setUp()
+                self.begin(start=3, goal=2, heading='RIGHT', exit_start=enabled)
+                if enabled:
+                    self.assertGreater(self.s.pose['x'], 821.)
+                    self.assertGreater(self.s.pose['y'], 800.)
+                    self.s.update_odom(dict(self.s.odom, x_m=-.275, y_m=.275))
+                self.assertAlmostEqual(self.s.pose['x'], 821.)
+                self.assertAlmostEqual(self.s.pose['y'], 800.)
 
 
 class MapTests(unittest.TestCase):

@@ -6,6 +6,8 @@ mission_node:                         # 比赛调度节点名称
     # 开局车头均朝向二维码区2；mission初始化/复位时将起点同步给路径节点。
     start_area: left                  # 比赛起点：left / right
     finish_area: left                 # 比赛最终停车终点：left / right；与起点独立，同区起停时两项填相同值
+    parking_offset_mm: 200            # 出入启停区时前后轴和左右轴各自的位移，正整数mm；两轴同时运动、不转头
+    screen_controlled: false          # true：先WAIT_SETUP，接收屏幕本轮配置后初始化，OK至少2秒且就绪后自动开始
     state_publish_rate_hz: 2.0        # 比赛状态发布频率，单位Hz，须大于0
     response_timeout_s: 5.0           # 接口响应超时，单位秒，须大于0；结果未知时不重发运动
     initialization_timeout_s: 15.0    # 初始化等待时限，单位秒，须大于0

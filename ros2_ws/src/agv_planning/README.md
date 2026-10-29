@@ -15,6 +15,10 @@
 
 比赛的 `start_area / finish_area` 统一放在 `agv_mission/config/mission.yaml`。mission初始化/复位时同步起点，最终停车区作为最后一次导航的明确目标发送；planner YAML不再重复配置起点。单独调试规划器且未绑定mission时，仍默认从节点1启动，可用节点参数 `start_area:=right` 改为节点3；这项调试默认值会在比赛初始化时被mission覆盖。
 
+正式比赛中，拓扑节点1表示启停区1左下角，节点3表示启停区3左上角。mission先请求原地节点的 `parking_maneuver: EXIT` 斜移出区，再扫描、提交地图并请求正常路线；最后抵达目标角点后请求 `ENTER` 斜移入区。`PlanRoute.parking_offset_mm` 表示两条车体轴各自的位移，由mission的同名参数提供，默认200 mm；合成斜线约283 mm。两个动作均保持车头朝向，按反馈朝向自动选择前后及左右。正常拓扑边长从角点起算，仍完整使用 `default_edge_length_mm / edge_length_mm`。
+
+斜移请求要求起终点相同且为1或3，不允许作业对齐；`EXIT` 允许在尚无扫描地图时执行，普通导航和 `ENTER` 仍遵守地图检查。斜移分别检查两轴位移并减速，单轴到达即停止该轴，两轴到达才完成；合成快慢速度沿用现有平移配置。`RouteStep.distance_mm` 对斜移表示每轴距离，执行段 `amount` 和计划总距离表示合成斜线长度（总距离取整到mm）。
+
 比赛绑定后订阅 `/mission/heartbeat`，心跳超时停止路线。运行状态中的quiescent/motion_released表示软件执行器已释放输出；实际停车和机构行驶许可还需真实C板反馈。调用方不能将Service接受等同于车辆物理静止。
 
 ```text
@@ -37,6 +41,16 @@ ros2 launch agv_planning planner.launch.py \
 ```
 
 YAML 是原生 ROS2 参数文件，运行中参数只读；修改后重启生效。
+
+比赛默认的单边行驶距离通过 `config/planner.yaml` 中的 `default_edge_length_mm` 调整，单位为 mm。例如将每条相邻道路从 1200 mm 改为 1000 mm：
+
+```yaml
+route_planner_node:
+  ros__parameters:
+    default_edge_length_mm: 1000
+```
+
+只修改现有文件中的这一项，保留其余配置。所有未被 `edge_length_mm` 单独覆盖的路段都会使用新长度，规划距离和运动到达判定同步生效；连续两个同向路段此时合并为 2000 mm。保存后按上面的命令显式加载源 YAML 并重启路径节点，无需重新构建。
 
 ## 接口与执行
 
@@ -74,7 +88,7 @@ YAML 是原生 ROS2 参数文件，运行中参数只读；修改后重启生效
 | 参数 | 默认 | 含义 |
 | --- | --- | --- |
 | `start_area` | `left` | 面向二维码板时，左侧启动区1为left，右侧启动区3为right；开局到2均为前进 |
-| `work_heading.node_2/4/6/8` | `UNSET` | 四个工作区作业朝向 |
+| `work_heading.node_2/4/6/8` | YAML：`DOWN/LEFT/RIGHT/DOWN`；未加载配置时 `UNSET` | 四个工作区作业时的车头朝向 |
 | `default_edge_length_mm` | 1200 | 相邻节点距离，整数mm |
 | `edge_length_mm.<小编号>_<大编号>` | 默认边长 | 无向边实测距离覆盖 |
 | `translation_fast_mps` / `translation_slow_mps` | 1.0 / 0.5 | 平移快慢速度 |
@@ -92,6 +106,8 @@ YAML 是原生 ROS2 参数文件，运行中参数只读；修改后重启生效
 `start=0` 从规划器当前记录的节点出发，空 `current_heading` 使用反馈 yaw 推导朝向。
 `goal=0` 回到配置启动区。显式 `start=1..9` 需要提供 `current_heading`。
 `align_at_goal=true` 只支持2、4、6、8四个工作区，终点朝向可从 YAML 或请求 `goal_heading` 提供；途中经过工作区不转头。
+
+`work_heading` 和请求中的 `goal_heading` 始终表示车头（+vx）的地图方向。当前约定二维码区用车左侧（+vy）面向二维码板，其余原料、粗加工、暂存区用车右侧（-vy）面向工作区，因此 YAML 中车头方向依次为2向下、4向左、6向右、8向下。到站后按实际朝向执行所需自转，已满足时不转；区间平移保持车头朝向。
 
 ## 调试例子
 
@@ -122,7 +138,7 @@ ros2 service call /route/plan agv_interfaces/srv/PlanRoute \
 Service 返回并在 `/route/path` 发布同一份计划，`status: ok` 表示已接受执行；真实完成必须等对应 `request_id` 的 `COMPLETED`。
 独立启动路径节点只输出内部控制反馈，不直接控制底盘；比赛中需配合mission及真实板间通信。原配置中的 `control_topic: /C/controll` 必须改为 `/route/control`，内部反馈消息类型也已改变，修改后重新构建并重启相关节点。
 失败状态包括 `no_path`、`invalid_request`、`map_not_ready`、`odometry_not_ready`、`odometry_invalid`、`execution_in_progress` 和 `duplicate_request_id`。节点运行期间会记录所有已接受的 `request_id`，重复 ID 不会再次触发运动；新任务必须使用新 ID，重启节点会清空记录。
-离散行动码：1前进、2左转90°、3右转90°、4左移、5右移、6后退。
+离散行动码：1前进、2左转90°、3右转90°、4左移、5右移、6后退、7前左斜移、8前右斜移、9后左斜移、10后右斜移。新增请求字段和行动码后需重新构建 `agv_interfaces` 及相关节点并重启。
 
 规划按 `(总路程, 移动方向变化次数)` 最小化，再按节点序列稳定选取同分路线。
 默认等长地图中 `7896` 比 `7856` 少一次方向变化；全通时同分的 `7456` 按节点序列优先，封锁7↔4时选择 `7896`。
@@ -137,4 +153,4 @@ ROS2 和 workspace 已 source 后，在独立 domain 运行：
 python3 -m unittest discover -s /root/工创/ros2_ws/src/agv_planning/test -p test_xy_execution.py -v
 ```
 
-`RoutePlan.total_distance_mm` 仍是拓扑计划总长度；删除的是实测反馈累计路程。`RouteExecutionProgress` 改为段起点、当前点、固定方向、投影进度和横向偏差。平移进度单位 mm、转向进度单位 deg。
+普通路线的 `RoutePlan.total_distance_mm` 仍是拓扑计划总长度；删除的是实测反馈累计路程。`RouteExecutionProgress` 改为段起点、当前点、固定方向、投影进度和横向偏差。平移进度单位 mm、转向进度单位 deg。

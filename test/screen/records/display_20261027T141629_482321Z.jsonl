@@ -1,0 +1,11 @@
+{"time_utc": "2026-10-27T14:16:29.484922+00:00", "monotonic_s": 3668.33778283, "kind": "start", "port": "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0", "baud": 9600, "write": true, "layout": "split", "controls": ["t0", "t1"], "target": "156+123+516+231"}
+{"time_utc": "2026-10-27T14:16:29.786695+00:00", "monotonic_s": 3668.639546809, "kind": "tx", "command": "", "hex": "ff ff ff"}
+{"time_utc": "2026-10-27T14:16:29.958701+00:00", "monotonic_s": 3668.81159136, "kind": "tx", "command": "connect", "hex": "63 6f 6e 6e 65 63 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:16:30.983245+00:00", "monotonic_s": 3669.836137262, "kind": "tx", "command": "get t0.txt", "hex": "67 65 74 20 74 30 2e 74 78 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:16:31.601411+00:00", "monotonic_s": 3670.454301566, "kind": "tx", "command": "get t1.txt", "hex": "67 65 74 20 74 31 2e 74 78 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:16:32.222280+00:00", "monotonic_s": 3671.075126088, "kind": "unconfirmed_write", "before": {"t0": null, "t1": null}}
+{"time_utc": "2026-10-27T14:16:32.222622+00:00", "monotonic_s": 3671.075448006, "kind": "tx", "command": "t0.txt=\"156+123\"", "hex": "74 30 2e 74 78 74 3d 22 31 35 36 2b 31 32 33 22 ff ff ff"}
+{"time_utc": "2026-10-27T14:16:32.850484+00:00", "monotonic_s": 3671.703324304, "kind": "tx", "command": "t1.txt=\"516+231\"", "hex": "74 31 2e 74 78 74 3d 22 35 31 36 2b 32 33 31 22 ff ff ff"}
+{"time_utc": "2026-10-27T14:16:33.489935+00:00", "monotonic_s": 3672.342781523, "kind": "tx", "command": "get t0.txt", "hex": "67 65 74 20 74 30 2e 74 78 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:16:34.120057+00:00", "monotonic_s": 3672.97289987, "kind": "tx", "command": "get t1.txt", "hex": "67 65 74 20 74 31 2e 74 78 74 ff ff ff"}
+{"time_utc": "2026-10-27T14:16:34.740329+00:00", "monotonic_s": 3673.593226512, "kind": "result", "status": "READBACK_FAILED", "expected": {"t0": "156+123", "t1": "516+231"}, "actual": {"t0": null, "t1": null}, "visual_acceptance": "PENDING"}

@@ -14,7 +14,7 @@ def pose_at(node, heading):
     return dict(x=x, y=y, angle=HEADINGS[heading], valid=True, edge=None)
 
 
-def measured_pose(odom, anchor, node, heading, lengths):
+def measured_pose(odom, anchor, node, heading, lengths, start_offset_mm=0):
     """Measured 2D displacement; never snap to route or endpoint.
 
     Mean parallel road lengths define a display grid. Inconsistent rectangular
@@ -42,6 +42,9 @@ def measured_pose(odom, anchor, node, heading, lengths):
     h = math.radians(HEADINGS[heading])
     mx = xs[col]-math.cos(h)*left+math.sin(h)*forward
     my = ys[row]-math.sin(h)*left-math.cos(h)*forward
+    # Competition starts inside the zone; topology anchors are its exit corners.
+    mx += start_offset_mm / 1000.
+    my += (-1 if node == 1 else 1) * start_offset_mm / 1000.
 
     def pixels(value, metric, image):
         i = 0 if value <= metric[1] else 1

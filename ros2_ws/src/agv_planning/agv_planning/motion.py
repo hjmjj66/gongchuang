@@ -7,6 +7,19 @@ from typing import Iterable
 from .planner import Opcode, Step
 
 
+_DIAGONAL_UNIT = sqrt(0.5)
+TRANSLATIONS = {
+    Opcode.FORWARD_ONE_EDGE: (1.0, 0.0),
+    Opcode.BACKWARD_ONE_EDGE: (-1.0, 0.0),
+    Opcode.STRAFE_LEFT_ONE_EDGE: (0.0, 1.0),
+    Opcode.STRAFE_RIGHT_ONE_EDGE: (0.0, -1.0),
+    Opcode.DIAGONAL_FORWARD_LEFT: (_DIAGONAL_UNIT, _DIAGONAL_UNIT),
+    Opcode.DIAGONAL_FORWARD_RIGHT: (_DIAGONAL_UNIT, -_DIAGONAL_UNIT),
+    Opcode.DIAGONAL_BACKWARD_LEFT: (-_DIAGONAL_UNIT, _DIAGONAL_UNIT),
+    Opcode.DIAGONAL_BACKWARD_RIGHT: (-_DIAGONAL_UNIT, -_DIAGONAL_UNIT),
+}
+
+
 @dataclass(frozen=True)
 class MotionSegment:
     opcode: Opcode
@@ -19,10 +32,9 @@ def merge_steps(steps: Iterable[Step]):
     segments = []
     for step in steps:
         opcode = Opcode(step.opcode)
-        amount = float(step.distance_mm) if opcode in (
-            Opcode.FORWARD_ONE_EDGE, Opcode.BACKWARD_ONE_EDGE,
-            Opcode.STRAFE_LEFT_ONE_EDGE, Opcode.STRAFE_RIGHT_ONE_EDGE,
-        ) else 90.0
+        amount = float(step.distance_mm) if opcode in TRANSLATIONS else 90.0
+        if opcode in TRANSLATIONS and all(TRANSLATIONS[opcode]):
+            amount *= sqrt(2.0)
         if segments and segments[-1].opcode == opcode:
             previous = segments[-1]
             segments[-1] = MotionSegment(
