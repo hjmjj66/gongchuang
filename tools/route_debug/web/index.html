@@ -8,22 +8,23 @@
 <header><div><span class="eyebrow">AGV / DEBUG TOOLS</span><h1>路线与底盘调试</h1></div><div id="connection" class="pill">连接中</div></header>
 <main>
   <section class="map-panel">
-    <div class="panel-title"><h2>赛场地图</h2><span class="subtle">实测二维里程轨迹</span></div>
+    <div class="panel-title"><h2>赛场地图</h2><span class="subtle">点击路段编号设置障碍</span></div>
     <div class="map-wrap">
       <img src="/map.png" alt="完整比赛地图及节点1至9编号" id="map-image">
-      <svg id="map-overlay" viewBox="0 0 1035 916" role="img" aria-label="路线与小车估算位置">
+      <svg id="map-overlay" viewBox="0 0 1035 916" role="group" aria-label="障碍路段选择、路线与小车估算位置">
         <polyline id="planned"/><polyline id="trace"/>
+        <g id="road-choices" role="group" aria-label="路段1至12，选中表示双向禁行"></g>
         <g id="start-marker" visibility="hidden"><circle r="24"/><text y="-31">起</text></g>
         <g id="goal-marker" visibility="hidden"><circle r="32"/><text y="45">终</text></g>
         <g id="car" visibility="hidden"><circle r="24"/><path d="M 0,-24 L 16,17 L 0,10 L -16,17 Z"/></g>
       </svg>
     </div>
-    <div class="legend"><span><i class="planned-key"></i>当前规划</span><span><i class="trace-key"></i>已走轨迹</span><span id="pose-label">等待设置起点</span></div>
+    <div class="legend"><span><i class="planned-key"></i>当前规划</span><span><i class="trace-key"></i>已走轨迹</span><span><i class="blocked-key"></i>障碍 / 双向禁行</span><span id="pose-label">等待设置起点</span></div>
   </section>
   <aside>
     <section class="card">
       <div class="panel-title"><h2>运行设置</h2><span class="tag">真实底盘</span></div>
-      <div class="mode-switch"><button type="button" data-mode="free" class="selected">自由行走</button><button type="button" data-mode="competition">模拟比赛</button></div>
+      <div class="mode-switch"><button type="button" data-mode="free" class="selected">自由行走</button><button type="button" data-mode="competition">模拟比赛</button><button type="button" data-mode="screen">显示屏驱动</button></div>
       <div class="fields">
         <label>假设当前点 / 起点<select id="start"></select></label>
         <label>终点 / 最终停车区<select id="goal"></select></label>
@@ -32,9 +33,11 @@
       <label class="checkbox" id="align-row"><input type="checkbox" id="align">到终点后按固定工作方向对齐</label>
       <label class="checkbox" id="exit-start-row"><input type="checkbox" id="exit-start">起步斜移出启停区（仅起点1或3）</label>
       <p class="hint" id="mode-hint"></p>
-      <div class="map-status"><span class="dot"></span>全部道路畅通<span class="subtle">封路设置后续加入</span></div>
+      <p class="hint" id="screen-status" hidden></p>
+      <div class="map-status" id="map-status"><span class="dot"></span><span id="blocked-summary" role="status" aria-live="polite">全部道路畅通</span><button type="button" id="clear-blocked" disabled>清空选择</button></div>
+      <p class="hint" id="road-hint">地图路段编号1～12与比赛一致，区别于底图节点编号1～9。可多选，再次点击取消；红色路段双向禁行。运行时锁定，停止后可修改。</p>
       <p class="notice">开始 / 复位前，请把车放到所选起点并摆正车头；模拟比赛或开启起步斜移时，请摆在启停区内，车辆会先斜移至角点。切PC会重建里程原点；坐标变化后请重新选择位置并开始。</p>
-      <div class="actions"><button id="start-button" class="primary">启动</button><button id="stop-button" class="danger">停止</button><button id="reset-button">复位</button></div>
+      <div class="actions"><button id="start-button" class="primary">开始</button><button id="stop-button" class="danger">停止</button><button id="reset-button">复位</button></div>
       <p id="operation-message" role="status" aria-live="polite"></p>
     </section>
     <section class="card">

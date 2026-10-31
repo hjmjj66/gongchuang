@@ -3,6 +3,9 @@ build/
 install/
 log/
 
+# Camera dataset collected on the board
+/ring_dataset_raw/
+
 # Python and test caches
 __pycache__/
 *.py[cod]

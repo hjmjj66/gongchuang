@@ -5,6 +5,7 @@
 - 比赛调度：`agv_mission`，已实现整批调度、开始/暂停/复位、阶段日志及统一速度转发，见 [比赛调度 README](src/agv_mission/README.md)。
 - 屏幕通信：`agv_screen`，人工禁行与雷达合并、屏幕选择起终点和一键启动、显示本轮扫码结果；[启动与操作说明](src/agv_screen/README.md)。`bash /root/工创/tools/start_screen_mission.sh` 启动调度和屏幕两个节点，硬件执行端仍分别启动；第四阶段成功次数待真实视觉结果接入。
 - 扫码节点：`agv_perception`，说明见下文。
+- 圆环工具：`agv_perception`，已实现编号框处理、ROI 霍夫圆精定位和图片调试，YOLO 模型与推理适配留空，见[使用说明](src/agv_perception/README.md)。
 - 路径规划节点：`agv_planning`，完整构建、配置与调试说明见 [路径规划 README](src/agv_planning/README.md)。
 - C板底盘通信：`agv_cboard`，USB CDC 速度下发、里程反馈、控制权及断流停车，见 [C板通信 README](src/agv_cboard/README.md)。实车接线、方向和停车效果仍需现场验收。
 - 路径规划消息与服务：`agv_interfaces`。mission只发目标，规划节点内部确定起点和当前朝向；`/route/path` 输出调试路线和行动链。规划节点读取 `/C/odometry`，通过 `/route/control` 返回速度及执行状态，mission校验后统一发布 `/C/controll`，供C板通信订阅。

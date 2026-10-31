@@ -7,26 +7,24 @@ from collections import deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .map_view import measured_pose, pose_at
+from .map_view import ROUTE_EDGES, measured_pose, pose_at
 
 # Map headings of the vehicle front: QR faces +vy; material stations face -vy.
 HEADINGS = {2: 'DOWN', 4: 'LEFT', 6: 'RIGHT', 8: 'DOWN'}
-BUSY = {'INITIALIZING', 'NAVIGATING', 'WAITING', 'STOPPING'}
+BUSY = {'SCREEN_SETUP', 'INITIALIZING', 'NAVIGATING', 'WAITING', 'STOPPING'}
 LABELS = ['扫码等待', '第一批取料等待', '第一批粗加工等待', '第一批暂存等待',
           '第二批取料等待', '第二批粗加工等待', '第二批码垛等待']
 
 
 def settings_from(raw):
-    if raw.get('blocked_edges'):
-        raise ValueError('初版暂未支持封路，请使用全通地图')
     mode = raw.get('mode', 'free')
-    if mode not in ('free', 'competition'):
+    if mode not in ('free', 'competition', 'screen'):
         raise ValueError('未知模式')
     start, goal = raw.get('start'), raw.get('goal')
     if type(start) is not int or type(goal) is not int or start not in range(1, 10) or goal not in range(1, 10):
         raise ValueError('起点与终点必须为1～9')
     heading = raw.get('heading', 'DOWN')
-    if mode == 'competition':
+    if mode in ('competition', 'screen'):
         if start not in (1, 3) or goal not in (1, 3):
             raise ValueError('比赛起终点只能为启停区1或2')
         heading = 'DOWN' if start == 1 else 'UP'
@@ -38,12 +36,23 @@ def settings_from(raw):
     exit_start = raw.get('exit_start', False)
     if not isinstance(exit_start, bool):
         raise ValueError('起步斜移开关必须为布尔值')
-    if mode == 'competition':
+    if mode in ('competition', 'screen'):
         exit_start = True
     elif exit_start and start not in (1, 3):
         raise ValueError('起步斜移仅支持启停区节点1或3')
+    blocked_edges = raw.get('blocked_edges', [])
+    if not isinstance(blocked_edges, list):
+        raise ValueError('封路设置必须为路段列表')
+    valid_edges = {tuple(sorted(edge)) for edge in ROUTE_EDGES.values()}
+    blocked = set()
+    for edge in blocked_edges:
+        if (not isinstance(edge, list) or len(edge) != 2
+                or any(type(node) is not int for node in edge)
+                or tuple(sorted(edge)) not in valid_edges):
+            raise ValueError('封路设置必须为地图相邻节点对（路段1～12）')
+        blocked.add(tuple(sorted(edge)))
     return dict(mode=mode, start=start, goal=goal, heading=heading, align=align,
-                exit_start=exit_start)
+                exit_start=exit_start, blocked_edges=sorted(blocked))
 
 
 class Session:
@@ -75,6 +84,9 @@ class Session:
         self.pending = {}
         self.epoch = 0
         self.stop_fault = False
+        self.screen_routes = None
+        self.screen_needs_reset = False
+        self.start_not_before = 0.
         self.last_command = [0.0, 0.0, 0.0]
         self.preflight_reason = '等待规划器、C板反馈'
         self._record('调试工具已启动；请先人工摆车')
@@ -116,30 +128,38 @@ class Session:
             return
         if action not in ('start', 'reset'):
             raise ValueError('未知操作')
-        if self.state in BUSY:
+        screen = raw.get('mode') == 'screen'
+        if self.state in BUSY and not (screen and action == 'reset' and self.state == 'SCREEN_SETUP'):
             raise ValueError('当前正在执行操作，请先停止')
         if self.owner and self.owner != client and self.clock() - self.owner_at < self.cfg['browser_timeout_s']:
             raise ValueError('另一页面持有控制权；本页只读，可停止')
+        if self.pending:
+            raise ValueError('尚有结果未明确的接口请求，请等待或重启工具后重新摆车')
+        if self.phase == 'UNCONFIRMED':
+            raise ValueError('停止尚未确认，请检查现场并重新启动工具')
+        if screen:
+            self._screen_command(action, client)
+            return
         settings = settings_from(raw)
         why = self.health(allow_lock=action == 'reset')
         if why:
             raise ValueError(why)
         if not self.io.services_ready():
             raise ValueError('规划器服务未就绪')
-        if self.pending:
-            raise ValueError('尚有结果未明确的接口请求，请等待或重启工具后重新摆车')
-        if self.phase == 'UNCONFIRMED':
-            raise ValueError('停止尚未确认，请检查现场并重新启动工具')
         self.owner, self.owner_at = client, self.clock()
+        self.start_not_before = 0.
+        self._initialize(settings, action == 'start')
+
+    def _initialize(self, settings, auto_start):
         self.epoch += 1
         self.settings = settings
-        self.auto_start = action == 'start'
+        self.auto_start = auto_start
         self.task_binding = self.binding
         self.anchor = None
         self.request_id, self.accepted, self.plan = '', False, None
         self.trace.clear()
         self.pose = None
-        if settings['mode'] == 'competition':
+        if settings['mode'] in ('competition', 'screen'):
             self.routes = [dict(goal=settings['start'], maneuver='EXIT', wait='')]
             self.routes += [dict(goal=goal, maneuver='', wait=label)
                             for goal, label in zip((2, 4, 6, 8, 4, 6, 8), LABELS)]
@@ -154,8 +174,54 @@ class Session:
         self.deadline = self.clock() + self.cfg['initialization_timeout_s']
         self._zero()
         self._state('INITIALIZING', '检查执行器并同步人工摆放的位置')
-        self.phase = 'GET_RUNTIME'
-        self._call('get_runtime', {}, self._begin_reset)
+        self.phase = 'WAIT_EXECUTOR'
+        if settings['mode'] != 'screen':
+            self.phase = 'GET_RUNTIME'
+            self._call('get_runtime', {}, self._begin_reset)
+
+    def _screen_command(self, action, client):
+        if action == 'start' and self.screen_needs_reset:
+            raise ValueError('显示屏本轮已结束，请先复位，再点击开始')
+        if action == 'start':
+            self.io.screen_start()
+        else:
+            self.io.screen_stop()
+        self.owner, self.owner_at = client, self.clock()
+        self.epoch += 1
+        self.settings = dict(mode='screen', blocked_edges=[])
+        self.screen_routes = None
+        self.screen_needs_reset = action == 'start'
+        self.start_not_before = 0.
+        self.run_id = self.request_id = self.phase = ''
+        self.routes, self.route_index = [], 0
+        self.anchor = self.pose = self.plan = self.segment = None
+        self.accepted = False
+        self.trace.clear()
+        self.started_at = self.finished_at = None
+        self._zero()
+        self._state('SCREEN_SETUP' if action == 'start' else 'IDLE',
+                    '已开放屏幕操作，请选择禁行路径并按 OK' if action == 'start' else
+                    '显示屏模式已复位；点击网页开始后才接收屏幕操作')
+
+    def screen_message(self, kind, values):
+        if self.state != 'SCREEN_SETUP':
+            return
+        if kind == 'ROUTE':
+            self.screen_routes = values
+            edges = sorted({tuple(sorted(ROUTE_EDGES[n])) for n in values})
+            self.settings['blocked_edges'] = edges
+            self._record('屏幕禁行路径：' + ('、'.join(map(str, values)) if values else '无'))
+            self.reason = '请在屏幕选择起终点，按 OK 后静止至少2秒开始比赛流程'
+        elif self.screen_routes is None:
+            self._record('未收到本轮禁行路径，请先在屏幕路径页按 OK')
+        else:
+            start, goal = (1 if zone == 1 else 3 for zone in values)
+            settings = dict(mode='screen', start=start, goal=goal,
+                heading='DOWN' if start == 1 else 'UP', align=False, exit_start=True,
+                blocked_edges=self.settings['blocked_edges'])
+            self.start_not_before = self.clock() + 2.
+            self._initialize(settings, True)
+            self.reason = '屏幕配置已接收；静止至少2秒，等待C板和执行端就绪'
 
     def _call(self, kind, payload, callback):
         token = uuid.uuid4().hex
@@ -212,7 +278,8 @@ class Session:
             self.trace.clear()
             if self.pose:
                 self.pose['valid'] = False
-            if self.state in ('INITIALIZING', 'NAVIGATING', 'WAITING', 'READY'):
+            if (self.state in ('NAVIGATING', 'WAITING', 'READY') or
+                    self.state == 'INITIALIZING' and self.phase != 'WAIT_EXECUTOR'):
                 self.stop('坐标/控制许可已变化；重新选择当前位置和朝向后开始', fault=True)
         self.binding = binding
 
@@ -339,6 +406,8 @@ class Session:
             self._dispatch()
         else:
             self.finished_at = self.clock()
+            if self.settings['mode'] == 'screen':
+                self.io.screen_stop()
             self._state('FINISHED', '路线演练完成；底盘输出已归零')
 
     def progress(self, msg, fresh=True):
@@ -358,6 +427,8 @@ class Session:
         self.finished_at = self.clock()
         self.accepted, self.stop_fault = False, fault
         self._zero()
+        if self.settings and self.settings['mode'] == 'screen':
+            self.io.screen_stop()
         self.phase = 'QUERY_STOP'
         self.deadline = self.clock() + self.cfg['service_timeout_s'] * 2
         if self.pose:
@@ -394,10 +465,10 @@ class Session:
         if self.run_id:
             self.io.lease(self.run_id)
         self.preflight_reason = self.health()
-        if self.state in ('INITIALIZING', 'NAVIGATING', 'WAITING', 'READY'):
+        if self.state in ('SCREEN_SETUP', 'INITIALIZING', 'NAVIGATING', 'WAITING', 'READY'):
             if now - self.owner_at > self.cfg['browser_timeout_s']:
                 self.stop('控制页面失联，需复位后重新开始', fault=True)
-            elif self.state != 'INITIALIZING' and self.preflight_reason:
+            elif self.state not in ('INITIALIZING', 'SCREEN_SETUP') and self.preflight_reason:
                 self.stop(self.preflight_reason, fault=True)
             elif self.state in ('NAVIGATING', 'WAITING'):
                 if now - self.odom_at > self.io.odom_timeout:
@@ -409,18 +480,28 @@ class Session:
         if self.state == 'INITIALIZING':
             if now > self.deadline:
                 self.stop('初始化超时：' + (self.preflight_reason or self.phase), fault=True)
+            elif self.phase == 'WAIT_EXECUTOR' and not self.preflight_reason and self.io.services_ready():
+                self.task_binding = self.binding
+                self.phase = 'GET_RUNTIME'
+                self._call('get_runtime', {}, self._begin_reset)
             elif self.phase == 'WAIT_ODOMETRY' and not self.preflight_reason and self.runtime:
                 rt = self.runtime
                 if (rt['run_id'] == self.run_id and rt['odometry_ready'] and self.anchor is not None
                         and self.task_binding == self.binding and now-self.odom_at < self.io.odom_timeout):
                     self.phase = 'WAIT_MAP'
             if self.phase == 'WAIT_MAP':
-                self.io.map(self.run_id, 1, [])
+                blocked = self.settings['blocked_edges']
+                self.io.map(self.run_id, 1, blocked)
                 rt = self.runtime
-                if rt and rt['run_id'] == self.run_id and rt['map_ready'] and rt['map_revision'] == 1 and not rt['blocked_edges'] and rt['config_ready']:
+                if (rt and not self.preflight_reason and rt['run_id'] == self.run_id and rt['map_ready']
+                        and rt['map_revision'] == 1 and rt['config_ready']
+                        and {tuple(sorted((edge['a'], edge['b']))) for edge in rt['blocked_edges']}
+                        == set(blocked)):
                     self.pose['valid'] = True
-                    if self.auto_start:
+                    if self.auto_start and now >= self.start_not_before:
                         self._dispatch()
+                    elif self.auto_start:
+                        self.reason = '屏幕启动倒计时，保持静止'
                     else:
                         self.phase = ''
                         self._state('READY', '复位完成，可以启动')
@@ -452,6 +533,8 @@ class Session:
         now = self.clock()
         return dict(state=self.state, reason=self.reason, phase=self.phase,
                     owner=self.owner, settings=self.settings, run_id=self.run_id,
+                    screen_needs_reset=self.screen_needs_reset,
+                    roads=ROUTE_EDGES,
                     route_index=self.route_index, route_count=len(self.routes),
                     goal=self.routes[self.route_index]['goal'] if self.routes else None,
                     parking_maneuver=self.routes[self.route_index]['maneuver'] if self.routes else '',
@@ -465,6 +548,7 @@ class Session:
                     motion_epoch=self.binding[1] if self.binding else 0,
                     command=self.last_command,
                     elapsed_s=max(0, (self.finished_at or now) - self.started_at) if self.started_at is not None else 0,
-                    wait_s=max(0, self.wait_until - now) if self.state == 'WAITING' else 0,
+                    wait_s=(max(0, self.wait_until - now) if self.state == 'WAITING' else
+                            max(0, self.start_not_before - now) if self.state == 'INITIALIZING' else 0),
                     preflight_reason=self.preflight_reason,
                     unresolved=bool(self.pending) or self.phase == 'UNCONFIRMED')

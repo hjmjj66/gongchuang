@@ -17,7 +17,7 @@
 
 正式比赛中，拓扑节点1表示启停区1左下角，节点3表示启停区3左上角。mission先请求原地节点的 `parking_maneuver: EXIT` 斜移出区，再扫描、提交地图并请求正常路线；最后抵达目标角点后请求 `ENTER` 斜移入区。`PlanRoute.parking_offset_mm` 表示两条车体轴各自的位移，由mission的同名参数提供，默认200 mm；合成斜线约283 mm。两个动作均保持车头朝向，按反馈朝向自动选择前后及左右。正常拓扑边长从角点起算，仍完整使用 `default_edge_length_mm / edge_length_mm`。
 
-斜移请求要求起终点相同且为1或3，不允许作业对齐；`EXIT` 允许在尚无扫描地图时执行，普通导航和 `ENTER` 仍遵守地图检查。斜移分别检查两轴位移并减速，单轴到达即停止该轴，两轴到达才完成；合成快慢速度沿用现有平移配置。`RouteStep.distance_mm` 对斜移表示每轴距离，执行段 `amount` 和计划总距离表示合成斜线长度（总距离取整到mm）。
+斜移请求要求起终点相同且为1或3，不允许作业对齐；`EXIT` 允许在尚无扫描地图时执行，普通导航和 `ENTER` 仍遵守地图检查。斜移与直线共用x/y位置PID，单轴进入容差即停止该轴，偏离或过冲后继续纠正；两轴和角度均到达才完成。车体vx/vy分别受 `translation_max_vx_mps` / `translation_max_vy_mps` 限制。`RouteStep.distance_mm` 对斜移表示每轴距离，执行段 `amount` 和计划总距离表示合成斜线长度（总距离取整到mm）。
 
 比赛绑定后订阅 `/mission/heartbeat`，心跳超时停止路线。运行状态中的quiescent/motion_released表示软件执行器已释放输出；实际停车和机构行驶许可还需真实C板反馈。调用方不能将Service接受等同于车辆物理静止。
 
@@ -66,7 +66,7 @@ route_planner_node:
 
 里程反馈为固定会话坐标 `x_m/y_m`（m）与连续航向 `yaw_rad/yaw_deg`，另有实际车体系速度、采样时间、有效性、坐标会话和许可代次。按消息时间和接收时间检查新鲜度，并检查 `/C/status` 的 PC/健康许可。
 
-每段平移记录起点和开始航向，将动作方向旋转到固定系，计算位移在固定目标方向的有符号投影（mm）。横向位移、反向运动和原地转动不能累计为前进；横向偏差只显示，本轮不自动纠偏或锁头。旋转仍比较连续 yaw。
+每段平移记录起点和目标航向，将动作方向旋转到固定系。目标位置在复位后首条有效里程建立，后续路段在原目标上累加位移，避免每段按实际停车位置重新起算而累积误差。显式指定起点或朝向的人工调试请求会重新建立位置基准。调试进度仍显示固定目标方向的有符号投影（mm）与横向偏差，控制使用完整x/y目标位置误差。
 
 速度字段为 `vx_mps`（向前正，m/s）、`vy_mps`（向左正，m/s）、`omega_deg_s`（逆时针正，°/s）。自动任务还绑定 `odom_session_id/motion_epoch`，mission 原样转发。
 采用明确单位的自定义消息，避免把角度/秒填入规定弧度/秒的 Twist 字段。
@@ -74,11 +74,12 @@ route_planner_node:
 `RouteControl.command` 为上述三个速度，`state` 为 `EXECUTING / COMPLETED / ABORTED`；完成和中止反馈中的速度必为零。反馈还包括采样时间、`run_id / request_id / executor_session_id / source`及任务内递增`sequence`，供mission过滤过期、旧任务、错误来源或乱序速度。`/route/execution_status`继续独立保留用于调试及状态核对。Service接受不代表导航完成。
 
 连续同类动作会合并执行：两个前进合成 2400 mm，两个同向转动合成180°，中间不停车。
-直线默认以 1 m/s 匀速行驶，最后100 mm使用匀减速关系 `v²=v1²+(v0²-v1²)×(剩余距离-到达容差)/(减速距离-到达容差)`，减至配置慢速，进入到达容差立即发零。
-转动速度同样以实际加载 YAML 为准（当前配置 60°/s、30°/s），最后5°减速；90°转向从85°开始减速，180°转向从175°开始。
-不同动作之间和最终到达时发布零速度。平移仅请求 omega=0（本轮不闭环锁头），后退优先于掉头再前进，只有终点要求作业朝向时才转头。
+直线与斜移均使用x/y双轴位置PID，沿x行驶时也纠正y偏差，横移时同理。位置误差和实测速度换算到目标航向对应的固定轴，分别按 `v = Kp × 位置误差 + Ki × 误差积分 - Kd × 实测速度` 计算速度，位置单位m、速度单位m/s。两轴共用增益、分别积分和限幅，当前vx上限0.7 m/s、vy上限0.4 m/s，分别由 `translation_max_vx_mps` / `translation_max_vy_mps` 配置。位置环逐轴限制输出，换算到当前车体系后再次限制，保证 `|vx| <= translation_max_vx_mps`、`|vy| <= translation_max_vy_mps`。某轴输出饱和且积分会加剧饱和时暂停该轴积分，另一轴仍独立积分；每轴进入位置容差后输出零并清积分，过冲可反向修正。
+角度环按 `omega = Kp × (目标角度 - 当前角度) + Ki × 误差积分 - Kd × 实测角速度` 输出 °/s，绝对值不超过 `angle_max_speed_deg_s`（当前120°/s）。D项使用里程反馈的实测角速度，避免切换目标角度时微分突跳；积分使用实际控制间隔，输出饱和且积分会加剧饱和时暂停累积。进入角度容差后输出零并清积分。
+目标航向在复位后的首条有效里程建立，跨动作及正常路线请求保留；转向在原目标上累加有符号转角，过冲后允许反向修正。显式指定起点或朝向的人工调试请求会以当前反馈重新建立航向基准。角度不回绕，跨360°及合并180°转向仍保持规划方向。
+前进、后退、横移和斜移同时运行位置环与角度环，将位置环输出换算到当前车体系，边纠偏边锁头。两条位置轴的绝对误差均不超过 `translation_arrival_tolerance_mm`（当前±3 mm），且角度进入 `turn_arrival_tolerance_deg` 才完成本段；位置到达后若因转动再次偏离，位置环会继续修正。不同动作之间和最终到达时发布零速度；后退优先于掉头再前进，只有终点要求作业朝向时才转头。
 
-执行期间拒绝新请求，保留当前路线。里程/状态消息超时、无效、坐标/运动许可变化，或目标方向投影/yaw在设定时限内没有推进时停车并中止，不自动续跑。
+执行期间拒绝新请求，保留当前路线。里程/状态消息超时、无效、坐标/运动许可变化，或任一未到达的位置轴、角度误差未缩小时停车并中止，不自动续跑。逐轴监测可检测侧向卡住或斜移单轴不响应，其他轴的推进不能掩盖故障。超时由 `motion_progress_timeout_s` 决定。
 坐标/运动许可变化后先人工确认当前位置与朝向，通过执行器上下文复位再发新任务，无需重启规划器。路线与视觉任务由调度状态机分配到不同阶段；本节点待命时不持续发布零速度。
 
 ## 参数与朝向
@@ -91,18 +92,21 @@ route_planner_node:
 | `work_heading.node_2/4/6/8` | YAML：`DOWN/LEFT/RIGHT/DOWN`；未加载配置时 `UNSET` | 四个工作区作业时的车头朝向 |
 | `default_edge_length_mm` | 1200 | 相邻节点距离，整数mm |
 | `edge_length_mm.<小编号>_<大编号>` | 默认边长 | 无向边实测距离覆盖 |
-| `translation_fast_mps` / `translation_slow_mps` | 1.0 / 0.5 | 平移快慢速度 |
-| `translation_deceleration_mm` | 100.0 | 平移减速区长度 |
-| `translation_arrival_tolerance_mm` | 5.0 | 平移到达容差 |
-| `turn_fast_deg_s` / `turn_slow_deg_s` | 60.0 / 30.0 | 转向快慢角速度 |
-| `turn_deceleration_deg` | 5.0 | 转向减速区角度 |
-| `turn_arrival_tolerance_deg` | 0.25 | 转向到达容差 |
+| `translation_pid_kp` / `translation_pid_ki` / `translation_pid_kd` | 2.0 / 0.0 / 0.1 | x/y共用位置环增益，分别为1/s、1/s²、无量纲；初值需实车整定，Ki=0关闭积分 |
+| `translation_max_vx_mps` | 0.7 | 车体前后速度绝对值上限，m/s，包含纠偏速度与斜移 |
+| `translation_max_vy_mps` | 0.4 | 车体左右速度绝对值上限，m/s，包含纠偏速度与斜移 |
+| `translation_arrival_tolerance_mm` | 3.0 | 两条位置轴各自允许的绝对误差，±mm；两轴均到达才通过位置判定 |
+| `angle_pid_kp` / `angle_pid_ki` / `angle_pid_kd` | 2.0 / 0.0 / 0.1 | 角度环增益，分别为1/s、1/s²、无量纲；初值需实车整定，Ki=0关闭积分 |
+| `angle_max_speed_deg_s` | 120.0 | 全部运动共用的PID角速度绝对值上限，°/s |
+| `turn_arrival_tolerance_deg` | 0.2 | 全部运动共用的角度允许误差，±°；平移还需距离到达 |
 | `odometry_timeout_s` | 0.5 | 接收里程反馈的最大间隔 |
-| `motion_progress_timeout_s` | 2.0 | 正在运动但方向投影或yaw没有推进时的停车时限 |
+| `motion_progress_timeout_s` | 2.0 | 任一未到达位置轴或角度误差无缩小时的停车时限 |
 | `control_rate_hz` | 50.0 | 控制发布频率 |
 | `require_map_snapshot` | true | 未收到合法地图时拒绝请求；false用于明确全通调试 |
 
 话题名及 Service 名也可在 YAML 修改。朝向为地图的 UP / RIGHT / DOWN / LEFT。
+
+旧的 `translation_fast_mps / translation_slow_mps / translation_deceleration_mm` 和 `turn_fast_deg_s / turn_slow_deg_s / turn_deceleration_deg` 已分别由位置PID和角度PID参数替代。修改代码后需重新构建 `agv_planning` 并重启；以后只改 YAML 时重启即可。`control_rate_hz` 默认50 Hz，是ROS定时控制频率，不是硬实时调度保证。
 `start=0` 从规划器当前记录的节点出发，空 `current_heading` 使用反馈 yaw 推导朝向。
 `goal=0` 回到配置启动区。显式 `start=1..9` 需要提供 `current_heading`。
 `align_at_goal=true` 只支持2、4、6、8四个工作区，终点朝向可从 YAML 或请求 `goal_heading` 提供；途中经过工作区不转头。

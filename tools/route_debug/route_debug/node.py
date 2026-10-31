@@ -8,6 +8,7 @@ import socket
 import time
 
 import yaml
+import serial
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node, NodeNameNonExistentError
@@ -15,13 +16,14 @@ from rosidl_runtime_py.convert import message_to_ordereddict
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from agv_interfaces.msg import (
-    BlockedEdges, CBoardStatus, ControlCommand, OdometryFeedback,
+    BlockedEdges, CBoardStatus, ControlCommand, Edge, OdometryFeedback,
     RouteControl, RouteExecutionProgress,
 )
 from agv_interfaces.srv import GetExecutorRuntime, PlanRoute, ResetExecutor, StopExecutor
 from agv_planning.planner import EDGES
 
 from .session import Session
+from .screen import Screen
 from .web_server import WebServer
 
 PREFIX = '/tools/route_debug'
@@ -45,6 +47,9 @@ class DebugNode(Node):
                 raise ValueError(f'无效调试配置：{key}')
         params = load_parameters(args.planner_config, 'route_planner_node')
         mission_params = load_parameters(args.mission_config, 'mission_node')
+        screen_params = load_parameters(args.screen_config, 'screen_node')
+        self.screen = Screen(args.screen_port or screen_params['serial_port'], screen_params['baudrate'])
+        self.screen_error = ''
         parking_offset = mission_params.get('parking_offset_mm', 200)
         if type(parking_offset) is not int or not 0 < parking_offset <= 4294967295:
             raise ValueError('parking_offset_mm must be a positive uint32 integer in mm')
@@ -56,10 +61,17 @@ class DebugNode(Node):
             lengths[tuple(sorted((a, b)))] = params.get('edge_length_mm.' + key,
                                                       params.get('edge_length_mm', {}).get(key, default))
         self.config_display = dict(source=str(Path(args.planner_config).resolve()),
-            translation_fast_mps=params.get('translation_fast_mps', 1.0),
-            translation_slow_mps=params.get('translation_slow_mps', .1),
-            turn_fast_deg_s=params.get('turn_fast_deg_s', 180.),
-            turn_slow_deg_s=params.get('turn_slow_deg_s', 60.),
+            translation_pid_kp=params.get('translation_pid_kp', 2.),
+            translation_pid_ki=params.get('translation_pid_ki', 0.),
+            translation_pid_kd=params.get('translation_pid_kd', .1),
+            translation_max_vx_mps=params.get('translation_max_vx_mps', .7),
+            translation_max_vy_mps=params.get('translation_max_vy_mps', .4),
+            translation_arrival_tolerance_mm=params.get('translation_arrival_tolerance_mm', 3.),
+            angle_pid_kp=params.get('angle_pid_kp', 2.),
+            angle_pid_ki=params.get('angle_pid_ki', 0.),
+            angle_pid_kd=params.get('angle_pid_kd', .1),
+            angle_max_speed_deg_s=params.get('angle_max_speed_deg_s', 120.),
+            turn_arrival_tolerance_deg=params.get('turn_arrival_tolerance_deg', .2),
             odometry_timeout_s=self.odom_timeout, parking_offset_mm=parking_offset,
             mission_source=str(Path(args.mission_config).resolve()))
         self.pub = self.create_publisher(ControlCommand, '/C/controll', 1)
@@ -101,6 +113,17 @@ class DebugNode(Node):
     def services_ready(self):
         return all(c.service_is_ready() for c in self.rpc_clients.values())
 
+    def screen_start(self):
+        try:
+            self.screen.start()
+        except (serial.SerialException, OSError) as exc:
+            self.screen_error = str(exc)
+            raise ValueError('显示屏串口未就绪：' + str(exc)) from exc
+        self.screen_error = ''
+
+    def screen_stop(self):
+        self.screen.stop()
+
     def exclusive(self):
         return self.graph_ok
 
@@ -130,7 +153,8 @@ class DebugNode(Node):
         self.lease_pub.publish(String(data=run_id))
 
     def map(self, run_id, revision, edges):
-        self.map_pub.publish(BlockedEdges(run_id=run_id, map_revision=revision, edges=edges))
+        self.map_pub.publish(BlockedEdges(run_id=run_id, map_revision=revision,
+                                         edges=[Edge(a=a, b=b) for a, b in edges]))
 
     def rpc(self, kind, payload, callback):
         client = self.rpc_clients[kind]
@@ -198,10 +222,21 @@ class DebugNode(Node):
             else:
                 self.web.finish(key)
         self.session.tick()
+        try:
+            self.screen.tick(self.session.screen_message)
+        except (serial.SerialException, OSError) as exc:
+            self.screen_error = str(exc)
+            self.screen.close()
+            if self.session.settings and self.session.settings['mode'] == 'screen':
+                self.session.stop('显示屏通信中断：' + str(exc), fault=True)
+        if self.screen.accepting and self.session.state != 'SCREEN_SETUP':
+            self.screen.stop()
 
     def _publish_web(self):
         state = self.session.snapshot()
         state['config'] = self.config_display
+        state['screen'] = dict(port=self.screen.port, connected=self.screen.ser is not None,
+                               accepting=self.screen.accepting, error=self.screen_error)
         with self.web.lock:
             state['operations'] = [dict(client=key[0], **value[1]) for key, value in
                                    list(self.web.operations.items())[-20:]]
@@ -210,13 +245,14 @@ class DebugNode(Node):
     def close(self):
         self.velocity(0, 0, 0)
         try:
-            if self.session.state in ('NAVIGATING', 'WAITING', 'INITIALIZING', 'READY'):
+            if self.session.state in ('SCREEN_SETUP', 'NAVIGATING', 'WAITING', 'INITIALIZING', 'READY'):
                 self.session.stop('工具退出')
                 deadline = time.monotonic() + 1.5
                 while time.monotonic() < deadline and self.session.state == 'STOPPING' and rclpy.ok():
                     rclpy.spin_once(self, timeout_sec=.02)
                     self.velocity(0, 0, 0)
         finally:
+            self.screen.close()
             self.web.close()
 
 
@@ -259,6 +295,8 @@ def main():
     parser.add_argument('--port', type=int)
     parser.add_argument('--planner-config', default=str(ROOT / 'ros2_ws/src/agv_planning/config/planner.yaml'))
     parser.add_argument('--mission-config', default=str(ROOT / 'ros2_ws/src/agv_mission/config/mission.yaml'))
+    parser.add_argument('--screen-config', default=str(ROOT / 'ros2_ws/src/agv_screen/config/screen.yaml'))
+    parser.add_argument('--screen-port')
     parser.add_argument('--debug-config', default=str(TOOL / 'config/debug.yaml'))
     args = parser.parse_args()
     if args.check:

@@ -2,7 +2,7 @@
 <package format="3">
   <name>agv_perception</name>
   <version>0.1.0</version>
-  <description>Stable USB camera QR scanning using preprocessing and ZBar.</description>
+  <description>USB camera QR scanning and numbered ring geometry tools.</description>
   <maintainer email="team@example.com">AGV Team</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>

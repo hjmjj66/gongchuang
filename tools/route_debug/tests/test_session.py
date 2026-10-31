@@ -5,7 +5,7 @@ import unittest
 import yaml
 
 from route_debug.session import Session, settings_from
-from route_debug.map_view import measured_pose
+from route_debug.map_view import ROUTE_EDGES, measured_pose
 
 CONFIG = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/debug.yaml').read_text())
 
@@ -24,6 +24,13 @@ class IO:
     def __init__(self):
         self.calls, self.commands, self.maps = [], [], []
         self.exclusive_ok = True
+        self.screen_open = False
+
+    def screen_start(self):
+        self.screen_open = True
+
+    def screen_stop(self):
+        self.screen_open = False
 
     def rpc(self, kind, payload, done):
         self.calls.append((kind, payload, done))
@@ -74,9 +81,11 @@ class SessionTests(unittest.TestCase):
         self.s.update_runtime(self.rt)
         self.s.heartbeat('browser-one')
 
-    def begin(self, mode='free', start=1, goal=2, heading='DOWN', align=False, exit_start=False):
+    def begin(self, mode='free', start=1, goal=2, heading='DOWN', align=False, exit_start=False,
+              blocked_edges=None):
         self.s.command('start', dict(mode=mode, start=start, goal=goal, heading=heading,
-                                     align=align, exit_start=exit_start), 'browser-one')
+                                     align=align, exit_start=exit_start,
+                                     blocked_edges=blocked_edges or []), 'browser-one')
         self.io.reply('get_runtime', {'runtime': self.rt})
         payload = self.io.calls[-1][1]
         self.assertEqual(payload['home_node'], start)
@@ -85,7 +94,8 @@ class SessionTests(unittest.TestCase):
         self.refresh()
         self.s.tick()
         self.assertEqual(self.s.phase, 'WAIT_MAP')
-        self.rt.update(map_ready=True, map_revision=1)
+        self.rt.update(map_ready=True, map_revision=1,
+                       blocked_edges=[dict(a=a, b=b) for a, b in self.s.settings['blocked_edges']])
         self.refresh()
         self.s.tick()
         self.assertEqual(self.s.state, 'NAVIGATING')
@@ -121,6 +131,151 @@ class SessionTests(unittest.TestCase):
         self.complete(finish_early=True)
         self.assertEqual(self.s.state, 'FINISHED')
         self.assertTrue(all(cmd == (0., 0., 0.) for cmd in self.io.commands))
+
+    def screen_setup(self, start=1, goal=2, routes=(1,)):
+        self.s.command('start', dict(mode='screen', start=9, goal=9,
+                                    blocked_edges=[[1, 2]]), 'browser-one')
+        self.s.screen_message('ROUTE', routes)
+        self.s.screen_message('CFG', (start, goal))
+        self.s.tick()
+        self.io.reply('get_runtime', {'runtime': self.rt})
+        self.rt.update(run_id=self.s.run_id, current_node=self.s.settings['start'],
+                       current_heading=self.s.settings['heading'])
+        self.io.reply('reset_context', {'accepted': True, 'runtime': self.rt})
+        self.refresh()
+        self.s.tick()
+        self.rt.update(map_ready=True, map_revision=1,
+                       blocked_edges=[dict(a=a, b=b) for a, b in self.s.settings['blocked_edges']])
+        self.refresh()
+        self.s.tick()
+
+    def test_screen_gate_ignores_browser_configuration_and_requires_route_ok(self):
+        self.s.screen_message('ROUTE', (1,))
+        self.s.screen_message('CFG', (2, 1))
+        self.assertIsNone(self.s.settings)
+        self.s.command('start', dict(mode='screen', start=9, goal=9), 'browser-one')
+        self.assertTrue(self.io.screen_open)
+        self.s.screen_message('CFG', (2, 1))
+        self.assertEqual(self.s.state, 'SCREEN_SETUP')
+        self.assertFalse(self.io.calls)
+        self.s.screen_message('ROUTE', (1, 5, 12))
+        self.s.screen_message('CFG', (2, 1))
+        self.assertEqual(self.s.settings['start'], 3)
+        self.assertEqual(self.s.settings['goal'], 1)
+        self.assertEqual(self.s.settings['heading'], 'UP')
+        self.assertEqual(self.s.settings['blocked_edges'], [(1, 2), (3, 6), (4, 7)])
+        before = self.s.settings.copy()
+        self.s.screen_message('ROUTE', ())
+        self.s.screen_message('CFG', (1, 2))
+        self.assertEqual(self.s.settings, before)
+
+    def test_screen_two_seconds_then_full_competition_and_reset_gate(self):
+        self.screen_setup()
+        self.assertEqual(self.s.state, 'INITIALIZING')
+        self.assertEqual(self.s.snapshot()['wait_s'], 2.)
+        self.assertFalse(self.io.calls)
+        self.clock.now += 1.99
+        self.refresh()
+        self.s.tick()
+        self.assertFalse(self.io.calls)
+        self.assertTrue(all(cmd == (0., 0., 0.) for cmd in self.io.commands))
+        self.clock.now += .01
+        self.refresh()
+        self.s.tick()
+        self.assertEqual(self.s.state, 'NAVIGATING')
+        self.assertEqual(self.s.routes[0]['maneuver'], 'EXIT')
+        self.assertEqual(self.io.maps[-1][2], [(4, 7)])
+        waits = 0
+        while self.s.state != 'FINISHED':
+            self.complete()
+            if self.s.state == 'WAITING':
+                waits += 1
+                self.clock.now += 3.
+                self.refresh()
+                self.s.tick()
+        self.assertEqual(waits, 7)
+        self.assertEqual(self.s.route_index, 9)
+        self.assertEqual(self.s.routes[-1], dict(goal=3, maneuver='ENTER', wait=''))
+        self.assertFalse(self.io.screen_open)
+        with self.assertRaisesRegex(ValueError, '先复位'):
+            self.s.command('start', dict(mode='screen'), 'browser-one')
+        self.s.command('reset', dict(mode='screen'), 'browser-one')
+        self.assertEqual(self.s.state, 'IDLE')
+        self.assertIsNone(self.s.screen_routes)
+        self.assertEqual(self.s.settings, dict(mode='screen', blocked_edges=[]))
+        self.s.screen_message('ROUTE', (2,))
+        self.s.screen_message('CFG', (1, 1))
+        self.assertEqual(self.s.state, 'IDLE')
+        self.s.command('start', dict(mode='screen'), 'browser-one')
+        self.assertEqual(self.s.state, 'SCREEN_SETUP')
+
+    def test_screen_waits_for_cboard_and_starts_only_after_executor_is_ready(self):
+        self.s.board = None
+        self.s.command('start', dict(mode='screen'), 'browser-one')
+        self.s.screen_message('ROUTE', ())
+        self.s.screen_message('CFG', (1, 1))
+        self.clock.now += 2.5
+        self.s.heartbeat('browser-one')
+        self.s.tick()
+        self.assertFalse(self.io.calls)
+        self.assertEqual(self.s.phase, 'WAIT_EXECUTOR')
+        self.s.update_board(dict(connected=False, status_valid=False, pc_control=False,
+            odometry_valid=False, motion_allowed=False, odom_session_id='', motion_epoch=0))
+        self.refresh()
+        self.s.tick()
+        self.assertEqual(self.s.phase, 'GET_RUNTIME')
+        self.io.reply('get_runtime', {'runtime': self.rt})
+        self.rt.update(run_id=self.s.run_id)
+        self.io.reply('reset_context', {'accepted': True, 'runtime': self.rt})
+        self.refresh()
+        self.s.tick()
+        self.rt.update(map_ready=True, map_revision=1)
+        self.refresh()
+        self.s.tick()
+        self.assertEqual(self.s.state, 'NAVIGATING')
+
+    def test_screen_without_board_times_out_without_dispatching_movement(self):
+        self.s.board = None
+        self.s.command('start', dict(mode='screen'), 'browser-one')
+        self.s.screen_message('ROUTE', ())
+        self.s.screen_message('CFG', (1, 1))
+        self.clock.now += CONFIG['initialization_timeout_s'] + .1
+        self.s.heartbeat('browser-one')
+        self.s.tick()
+        self.assertEqual(self.s.state, 'STOPPING')
+        self.assertFalse(self.io.screen_open)
+        self.assertEqual([c[0] for c in self.io.calls], ['get_runtime'])
+        self.assertTrue(all(cmd == (0., 0., 0.) for cmd in self.io.commands))
+
+    def test_screen_emergency_stop_cancels_countdown_and_screen_restart(self):
+        self.screen_setup()
+        self.s.command('stop', {}, 'observer')
+        self.assertFalse(self.io.screen_open)
+        self.io.reply('get_runtime', {'runtime': self.rt})
+        self.assertEqual(self.s.state, 'STOPPED')
+        self.clock.now += 3.
+        self.refresh()
+        self.s.screen_message('ROUTE', ())
+        self.s.screen_message('CFG', (1, 1))
+        self.s.tick()
+        self.assertEqual(self.s.state, 'STOPPED')
+        self.assertFalse(self.io.calls)
+        with self.assertRaisesRegex(ValueError, '先复位'):
+            self.s.command('start', dict(mode='screen'), 'browser-one')
+
+    def test_screen_setup_reset_and_browser_loss_close_gate(self):
+        self.s.board = None
+        self.s.command('start', dict(mode='screen'), 'browser-one')
+        self.s.screen_message('ROUTE', (1,))
+        self.s.command('reset', dict(mode='screen'), 'browser-one')
+        self.assertEqual(self.s.state, 'IDLE')
+        self.assertFalse(self.io.screen_open)
+        self.assertFalse(self.io.calls)
+        self.s.command('start', dict(mode='screen'), 'browser-one')
+        self.clock.now += CONFIG['browser_timeout_s'] + .1
+        self.s.tick()
+        self.assertEqual(self.s.state, 'STOPPING')
+        self.assertFalse(self.io.screen_open)
 
     def test_free_optional_exit_preserves_heading_and_aligns_only_at_destination(self):
         for node in (1, 3):
@@ -298,9 +453,42 @@ class SessionTests(unittest.TestCase):
         self.complete()
         self.assertEqual((self.s.pose['x'],self.s.pose['y']),(900.,470.))
 
-    def test_future_sealing_rejects_nonempty_blocked_edges(self):
-        with self.assertRaisesRegex(ValueError, '封路'):
-            settings_from(dict(start=1, goal=2, blocked_edges=[[1,2]]))
+    def test_blocked_edges_validate_and_normalize_at_entry(self):
+        raw = dict(start=1, goal=2, blocked_edges=[[7,4],[4,7],[2,1]])
+        self.assertEqual(settings_from(raw)['blocked_edges'], [(1,2),(4,7)])
+        self.assertEqual(settings_from(dict(start=1, goal=2))['blocked_edges'], [])
+        for blocked in (None, '1', {}, [[1,3]], [[1,1]], [[1]], [[1,2,3]],
+                        [[True,2]], [[1.,2]], [['1',2]], [None]):
+            with self.subTest(blocked=blocked), self.assertRaisesRegex(ValueError, '封路'):
+                settings_from(dict(start=1, goal=2, blocked_edges=blocked))
+
+    def test_blocked_map_in_both_modes_and_locked_during_execution(self):
+        for mode in ('free', 'competition'):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.begin(mode=mode, goal=3, blocked_edges=[[7,4],[1,2]])
+                self.assertEqual(self.io.maps[-1], (self.s.run_id, 1, [(1,2),(4,7)]))
+                self.assertEqual(self.s.snapshot()['settings']['blocked_edges'], [(1,2),(4,7)])
+                for action in ('start', 'reset'):
+                    with self.assertRaisesRegex(ValueError, '先停止'):
+                        self.s.command(action, dict(start=1, goal=3, blocked_edges=[]), 'browser-one')
+                self.assertEqual(self.s.settings['blocked_edges'], [(1,2),(4,7)])
+
+    def test_waits_for_matching_map_before_planning(self):
+        self.begin(blocked_edges=[[1,2]])
+        self.io.calls.clear()
+        self.s.state, self.s.phase = 'INITIALIZING', 'WAIT_MAP'
+        for wrong in ([], [dict(a=1,b=4)]):
+            self.rt['blocked_edges'] = wrong
+            self.refresh()
+            self.s.tick()
+            self.assertEqual(self.s.phase, 'WAIT_MAP')
+            self.assertFalse(self.io.calls)
+        self.rt['blocked_edges'] = [dict(a=2,b=1)]
+        self.refresh()
+        self.s.tick()
+        self.assertEqual(self.s.state, 'NAVIGATING')
+        self.assertEqual(self.io.calls[-1][0], 'plan')
 
     def test_parking_stop_never_dispatches_next_route(self):
         for final in (False, True):
@@ -356,6 +544,11 @@ class SessionTests(unittest.TestCase):
 
 
 class MapTests(unittest.TestCase):
+    def test_road_numbering_matches_existing_screen(self):
+        import runpy
+        path = Path(__file__).resolve().parents[3] / 'ros2_ws/src/agv_mission/agv_mission/screen_config.py'
+        self.assertEqual(ROUTE_EDGES, runpy.run_path(str(path))['ROUTE_EDGES'])
+
     def test_measured_xy_not_snapped_to_road(self):
         anchor=dict(x_m=0.,y_m=0.,yaw_rad=0.,yaw_deg=0.,valid=True)
         odom=dict(anchor,x_m=.6,y_m=.2)

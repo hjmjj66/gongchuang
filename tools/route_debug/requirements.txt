@@ -1,2 +1,3 @@
 # No pip dependencies. HTTP/SSE uses the Python standard library.
-# ROS2 Humble, python3-yaml, and the existing workspace packages are required.
+# ROS2 Humble, python3-yaml, python3-serial, and the workspace packages
+# (including agv_screen for its screen protocol) are required.

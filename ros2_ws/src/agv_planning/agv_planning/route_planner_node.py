@@ -16,7 +16,7 @@ from agv_interfaces.msg import (
 )
 from agv_interfaces.srv import PlanRoute
 
-from .motion import TRANSLATIONS, merge_steps, ramp_speed
+from .motion import AnglePID, PositionPID, TRANSLATIONS, merge_steps
 from .odometry import body_to_fixed, projection
 from .planner import EDGES, HEADINGS, Opcode, Topology, check_node, normalize_heading, parking_step
 from .executor_contract import ExecutorContract
@@ -39,11 +39,11 @@ class RoutePlannerNode(Node):
         self._segments = ()
         self._segment_index = 0
         self._segment_baseline = None
-        self._segment_progress = 0.0
-        self._segment_progress_time = None
         self._last_odom_received = None
         self._odom_fault = None
         self._position = None
+        self._target_position = None
+        self._body_velocity = (0.0, 0.0)
         self._direction = None
         self._binding = None
         self._task_binding = None
@@ -54,6 +54,8 @@ class RoutePlannerNode(Node):
         self._context_invalid = False
         self._yaw_deg = None
         self._initial_yaw_deg = None
+        self._target_yaw_deg = None
+        self._wz_deg_s = 0.0
         self._last_task_id = ''
         self._last_state = ''
         self._last_reason = ''
@@ -84,18 +86,26 @@ class RoutePlannerNode(Node):
         self._topology = Topology(default_length, lengths)
         self._require_snapshot = self._param('require_map_snapshot', True)
 
-        self._v_fast = float(self._param('translation_fast_mps', 1.0))
-        self._v_slow = float(self._param('translation_slow_mps', 0.1))
-        self._translation_decel_mm = float(self._param('translation_deceleration_mm', 100.0))
-        self._translation_tolerance_mm = float(self._param('translation_arrival_tolerance_mm', 5.0))
-        self._w_fast = float(self._param('turn_fast_deg_s', 180.0))
-        self._w_slow = float(self._param('turn_slow_deg_s', 60.0))
-        self._turn_decel_deg = float(self._param('turn_deceleration_deg', 5.0))
-        self._turn_tolerance_deg = float(self._param('turn_arrival_tolerance_deg', 0.25))
+        self._translation_kp = float(self._param('translation_pid_kp', 2.0))
+        self._translation_ki = float(self._param('translation_pid_ki', 0.0))
+        self._translation_kd = float(self._param('translation_pid_kd', 0.1))
+        self._vx_max = float(self._param('translation_max_vx_mps', 0.7))
+        self._vy_max = float(self._param('translation_max_vy_mps', 0.4))
+        self._translation_tolerance_mm = float(self._param('translation_arrival_tolerance_mm', 3.0))
+        self._angle_kp = float(self._param('angle_pid_kp', 2.0))
+        self._angle_ki = float(self._param('angle_pid_ki', 0.0))
+        self._angle_kd = float(self._param('angle_pid_kd', 0.1))
+        self._w_max = float(self._param('angle_max_speed_deg_s', 120.0))
+        self._turn_tolerance_deg = float(self._param('turn_arrival_tolerance_deg', 0.2))
         self._odom_timeout = float(self._param('odometry_timeout_s', 0.5))
         self._motion_progress_timeout = float(self._param('motion_progress_timeout_s', 2.0))
         self._control_rate = float(self._param('control_rate_hz', 50.0))
         self._validate_motion_config()
+        self._angle_pid = AnglePID(self._angle_kp, self._angle_ki, self._angle_kd,
+                                   self._w_max, self._turn_tolerance_deg)
+        self._position_pid = PositionPID(self._translation_kp, self._translation_ki,
+                                         self._translation_kd, (self._vx_max, self._vy_max),
+                                         self._translation_tolerance_mm / 1000.0)
 
         reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
                               durability=DurabilityPolicy.VOLATILE)
@@ -153,23 +163,22 @@ class RoutePlannerNode(Node):
         return None if value == 'UNSET' else normalize_heading(value)
 
     def _validate_motion_config(self):
-        positive = (self._v_fast, self._v_slow, self._translation_decel_mm,
-                    self._w_fast, self._w_slow, self._turn_decel_deg,
+        positive = (self._vx_max, self._vy_max, self._w_max,
                     self._odom_timeout, self._motion_progress_timeout, self._control_rate, self._board_timeout)
         if not all(math.isfinite(value) and value > 0 for value in positive):
-            raise ValueError('motion speeds, deceleration distances and rates must be positive')
+            raise ValueError('motion speed limits, timeouts and rates must be positive')
         timer_period_ns = 1e9 / self._control_rate
         if not math.isfinite(timer_period_ns) or not 1 <= timer_period_ns < 2**63:
             raise ValueError('control rate must produce a representable timer period of at least 1 ns')
-        if self._v_slow > self._v_fast or self._w_slow > self._w_fast:
-            raise ValueError('slow speeds must not exceed fast speeds')
+        for name, gains in (('angle', (self._angle_kp, self._angle_ki, self._angle_kd)),
+                            ('translation', (self._translation_kp, self._translation_ki,
+                                             self._translation_kd))):
+            if not all(math.isfinite(value) and value >= 0 for value in gains) or gains[0] <= 0:
+                raise ValueError(f'{name} PID gains must be finite and nonnegative; Kp must be positive')
         if (not math.isfinite(self._translation_tolerance_mm)
                 or not math.isfinite(self._turn_tolerance_deg)
                 or self._translation_tolerance_mm < 0 or self._turn_tolerance_deg < 0):
             raise ValueError('arrival tolerances must be finite and nonnegative')
-        if (self._translation_tolerance_mm >= self._translation_decel_mm
-                or self._turn_tolerance_deg >= self._turn_decel_deg):
-            raise ValueError('arrival tolerances must be smaller than deceleration zones')
         if (self._translation_tolerance_mm >= min(self._topology.lengths.values())
                 or self._turn_tolerance_deg >= 90.0):
             raise ValueError('arrival tolerances must be smaller than one edge or one quarter turn')
@@ -204,6 +213,8 @@ class RoutePlannerNode(Node):
         self._position_known = False
         self._context_invalid = True
         self._initial_yaw_deg = None
+        self._target_yaw_deg = None
+        self._target_position = None
         self._segment_baseline = None
 
     def _on_board(self, message):
@@ -238,11 +249,15 @@ class RoutePlannerNode(Node):
             return
         self._odom_fault = None
         self._position = (float(message.x_m), float(message.y_m))
+        self._body_velocity = (float(message.vx_mps), float(message.vy_mps))
         self._yaw_deg = float(message.yaw_deg)
+        self._wz_deg_s = math.degrees(message.wz_rad_s)
         self._last_odom_received = time.monotonic()-age
         if not self._context_invalid:
             if self._initial_yaw_deg is None:
                 self._initial_yaw_deg = self._yaw_deg
+                self._target_yaw_deg = self._yaw_deg
+                self._target_position = self._position
             delta = self._yaw_deg-self._initial_yaw_deg
             quarter_turns = int(round(delta/90.0))
             base = HEADINGS.index(self._heading_reference)
@@ -345,8 +360,11 @@ class RoutePlannerNode(Node):
                     self._current_node = start
                     self._current_heading = heading
                     self._position_known = True
-                    self._heading_reference = heading
-                    self._initial_yaw_deg = self._yaw_deg
+                    if request.start != 0 or request.current_heading:
+                        self._heading_reference = heading
+                        self._initial_yaw_deg = self._yaw_deg
+                        self._target_yaw_deg = self._yaw_deg
+                        self._target_position = self._position
                     self._remember_request_id(plan.request_id)
                     self._start_execution(plan.request_id, steps, goal)
         except _DuplicateRequestId:
@@ -409,41 +427,50 @@ class RoutePlannerNode(Node):
         if self._segment_baseline is None:
             self._segment_from_node = self._current_node
             self._segment_start_heading = self._current_heading
-            self._segment_baseline = (*self._position, self._yaw_deg)
-            self._direction = (body_to_fixed(*TRANSLATIONS[segment.opcode], math.radians(self._yaw_deg))
+            self._segment_baseline = (*self._position, self._target_yaw_deg)
+            self._direction = (body_to_fixed(*TRANSLATIONS[segment.opcode], math.radians(self._target_yaw_deg))
                                if segment.opcode in TRANSLATIONS else None)
-            self._segment_progress = 0.0
-            self._segment_progress_time = time.monotonic()
-        x_base, y_base, yaw_base = self._segment_baseline
-        if segment.opcode in TRANSLATIONS:
-            vx_sign, vy_sign = TRANSLATIONS[segment.opcode]
-            if vx_sign and vy_sign:
-                velocities, traveled, done = self._diagonal_motion(segment, vx_sign, vy_sign)
+            if segment.opcode in TRANSLATIONS:
+                self._target_position = tuple(position + direction * segment.amount / 1000.0
+                                              for position, direction in
+                                              zip(self._target_position, self._direction))
             else:
-                traveled, _ = projection((x_base, y_base), self._position, self._direction)
-                remaining = segment.amount - traveled
-                speed = ramp_speed(remaining, self._translation_decel_mm, self._v_fast,
-                                   self._v_slow, self._translation_tolerance_mm)
-                velocities = vx_sign * speed, vy_sign * speed
-                done = remaining <= self._translation_tolerance_mm
-            if self._check_motion_progress(max(0.0, traveled)):
-                self._abort('no progress along target direction')
+                sign = 1.0 if segment.opcode == Opcode.TURN_LEFT_90 else -1.0
+                self._target_yaw_deg += sign * segment.amount
+            self._angle_pid.reset()
+            self._position_pid.reset()
+            self._angle_control_time = None
+            self._angle_progress_error = None
+            self._position_progress_error = [None, None]
+            self._position_progress_time = [time.monotonic(), time.monotonic()]
+        _, _, yaw_base = self._segment_baseline
+        error = self._target_yaw_deg - self._yaw_deg
+        if not math.isfinite(error):
+            self._abort('invalid yaw difference during segment')
+            return
+        angle_done = abs(error) <= self._turn_tolerance_deg
+        if self._check_angle_progress(abs(error)):
+            self._abort('yaw error made no progress during segment')
+            return
+        now = time.monotonic()
+        dt = (1.0 / self._control_rate if self._angle_control_time is None
+              else now - self._angle_control_time)
+        self._angle_control_time = now
+        omega = self._angle_pid.update(error, self._wz_deg_s, dt)
+        if segment.opcode in TRANSLATIONS:
+            velocities, errors, done = self._translation_motion(dt)
+            if self._check_position_progress(errors):
+                self._abort('XY position error made no progress during segment')
                 return
-            self._publish_control(*velocities, 0.0)
+            velocities = body_to_fixed(*velocities, math.radians(yaw_base - self._yaw_deg))
+            # Heading correction rotates XY, so enforce the limits again in the current body frame.
+            velocities = tuple(max(-limit, min(limit, value)) for value, limit in
+                               zip(velocities, (self._vx_max, self._vy_max)))
+            self._publish_control(*velocities, omega)
+            done = done and angle_done
         else:
-            sign = 1.0 if segment.opcode == Opcode.TURN_LEFT_90 else -1.0
-            turned = (self._yaw_deg - yaw_base) * sign
-            if not math.isfinite(turned):
-                self._abort('invalid yaw difference during segment')
-                return
-            if self._check_motion_progress(max(0.0, turned)):
-                self._abort('yaw made no progress during segment')
-                return
-            remaining = segment.amount - turned
-            speed = ramp_speed(remaining, self._turn_decel_deg, self._w_fast,
-                               self._w_slow, self._turn_tolerance_deg)
-            self._publish_control(0.0, 0.0, sign * speed)
-            done = remaining <= self._turn_tolerance_deg
+            self._publish_control(0.0, 0.0, omega)
+            done = angle_done
         if done:
             self._publish_zero()
             self._current_node = segment.end_node
@@ -458,28 +485,42 @@ class RoutePlannerNode(Node):
                 self._segment_baseline = None
                 self._publish_status(self._request_id, 'EXECUTING', self._segment_index, '')
 
-    def _diagonal_motion(self, segment, vx_sign, vy_sign):
-        x_base, y_base, yaw_base = self._segment_baseline
-        dx, dy = body_to_fixed(self._position[0] - x_base, self._position[1] - y_base,
-                              -math.radians(yaw_base))
-        axis_target = segment.amount / math.sqrt(2.0)
-        axis_progress = (math.copysign(1.0, vx_sign) * dx * 1000.0,
-                         math.copysign(1.0, vy_sign) * dy * 1000.0)
-        remaining_axes = tuple(axis_target - value for value in axis_progress)
-        # Both axes must arrive; one axis alone can have the full diagonal projection.
-        traveled = min(axis_progress) * math.sqrt(2.0)
-        velocities = tuple(math.copysign(1.0, direction) * ramp_speed(
-            remaining, self._translation_decel_mm,
-            abs(direction) * self._v_fast, abs(direction) * self._v_slow,
-            self._translation_tolerance_mm)
-            for direction, remaining in zip((vx_sign, vy_sign), remaining_axes))
-        return velocities, traveled, max(remaining_axes) <= self._translation_tolerance_mm
+    def _translation_motion(self, dt):
+        yaw_base = self._segment_baseline[2]
+        errors = body_to_fixed(self._target_position[0] - self._position[0],
+                               self._target_position[1] - self._position[1],
+                               -math.radians(yaw_base))
+        velocities = body_to_fixed(*self._body_velocity, math.radians(self._yaw_deg - yaw_base))
+        command = self._position_pid.update(errors, velocities, dt)
+        done = all(abs(error) <= self._position_pid.tolerance for error in errors)
+        return command, errors, done
 
-    def _check_motion_progress(self, progress):
-        if progress > self._segment_progress + 0.1:
-            self._segment_progress = progress
-            self._segment_progress_time = time.monotonic()
-        return time.monotonic() - self._segment_progress_time > self._motion_progress_timeout
+    def _check_position_progress(self, errors):
+        now = time.monotonic()
+        threshold = min(0.1, self._translation_tolerance_mm)
+        for axis, error in enumerate(errors):
+            error_mm = abs(error) * 1000.0
+            if error_mm <= self._translation_tolerance_mm:
+                self._position_progress_error[axis] = None
+            elif (self._position_progress_error[axis] is None
+                  or error_mm < self._position_progress_error[axis] - threshold):
+                self._position_progress_error[axis] = error_mm
+                self._position_progress_time[axis] = now
+            elif now - self._position_progress_time[axis] > self._motion_progress_timeout:
+                return True
+        return False
+
+    def _check_angle_progress(self, error):
+        now = time.monotonic()
+        if error <= self._turn_tolerance_deg:
+            self._angle_progress_error = None
+        elif (self._angle_progress_error is None
+              or error < self._angle_progress_error - min(0.1, self._turn_tolerance_deg)):
+            self._angle_progress_error = error
+            self._angle_progress_time = now
+        else:
+            return now - self._angle_progress_time > self._motion_progress_timeout
+        return False
 
     def _publish_control(self, vx, vy, omega, state='EXECUTING', reason=''):
         self._control_sequence += 1
@@ -596,6 +637,10 @@ class RoutePlannerNode(Node):
         self._current_node, self._current_heading = request.home_node, request.initial_heading
         self._heading_reference = request.initial_heading
         self._initial_yaw_deg = None
+        self._target_yaw_deg = None
+        self._target_position = None
+        self._angle_pid.reset()
+        self._position_pid.reset()
         self._position_known = True
         self._context_invalid = False
         self._task_binding = None

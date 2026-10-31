@@ -1,7 +1,7 @@
-"""Small helpers for merging route actions and generating deceleration profiles."""
+"""Route segments and position/angle feedback control."""
 
 from dataclasses import dataclass
-from math import hypot, isfinite, sqrt
+from math import sqrt
 from typing import Iterable
 
 from .planner import Opcode, Step
@@ -28,6 +28,57 @@ class MotionSegment:
     target_heading: str
 
 
+class AnglePID:
+    """Degrees in, degrees/second out; derivative uses measured angular rate."""
+
+    def __init__(self, kp, ki, kd, max_speed, tolerance):
+        self.kp, self.ki, self.kd = kp, ki, kd
+        self.max_speed, self.tolerance = max_speed, tolerance
+        self.reset()
+
+    def reset(self):
+        self.integral = 0.0
+
+    def update(self, error, angular_rate, dt):
+        if abs(error) <= self.tolerance:
+            self.reset()
+            return 0.0
+        integral = self.integral + error * dt if self.ki else 0.0
+        output = self.kp * error + self.ki * integral - self.kd * angular_rate
+        # Freeze integration only when it would push farther into saturation.
+        if abs(output) <= self.max_speed or output * error < 0:
+            self.integral = integral
+        output = self.kp * error + self.ki * self.integral - self.kd * angular_rate
+        return max(-self.max_speed, min(self.max_speed, output))
+
+
+class PositionPID:
+    """Metres in, metres/second out, with independent XY speed limits."""
+
+    def __init__(self, kp, ki, kd, max_speeds, tolerance):
+        self.kp, self.ki, self.kd = kp, ki, kd
+        self.max_speeds, self.tolerance = max_speeds, tolerance
+        self.reset()
+
+    def reset(self):
+        self.integral = [0.0, 0.0]
+
+    def update(self, errors, velocities, dt):
+        output = []
+        for axis, (error, velocity, limit) in enumerate(zip(errors, velocities, self.max_speeds)):
+            if abs(error) <= self.tolerance:
+                self.integral[axis] = 0.0
+                output.append(0.0)
+            else:
+                integral = self.integral[axis] + error * dt if self.ki else 0.0
+                value = self.kp * error + self.ki * integral - self.kd * velocity
+                if abs(value) <= limit or value * error < 0:
+                    self.integral[axis] = integral
+                value = self.kp * error + self.ki * self.integral[axis] - self.kd * velocity
+                output.append(max(-limit, min(limit, value)))
+        return tuple(output)
+
+
 def merge_steps(steps: Iterable[Step]):
     segments = []
     for step in steps:
@@ -43,22 +94,4 @@ def merge_steps(steps: Iterable[Step]):
         else:
             segments.append(MotionSegment(opcode, amount, step.to_node, step.target_heading))
     return tuple(segments)
-
-
-def ramp_speed(remaining: float, deceleration_distance: float,
-               fast_speed: float, slow_speed: float, tolerance: float = 0.0):
-    values = (remaining, deceleration_distance, fast_speed, slow_speed, tolerance)
-    if not all(isfinite(value) for value in values):
-        raise ValueError('speed profile values must be finite')
-    if tolerance < 0 or deceleration_distance <= tolerance:
-        raise ValueError('deceleration distance must exceed a nonnegative tolerance')
-    if fast_speed <= 0 or slow_speed <= 0 or slow_speed > fast_speed:
-        raise ValueError('speeds must be positive and slow speed must not exceed fast speed')
-    if remaining <= tolerance:
-        return 0.0
-    if deceleration_distance <= 0 or remaining >= deceleration_distance:
-        return fast_speed
-    ratio = min(1.0, max(0.0,
-                         (remaining - tolerance) / (deceleration_distance - tolerance)))
-    return hypot(slow_speed * sqrt(1.0 - ratio), fast_speed * sqrt(ratio))
 

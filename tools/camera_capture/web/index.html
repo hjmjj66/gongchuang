@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>主摄像头 · 数据采集</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">AGV / DATA COLLECTION</p><h1>主摄像头采集</h1></div>
+      <span id="connection" class="status"><i></i><span>连接中</span></span>
+    </header>
+    <div class="workspace">
+      <section class="preview-panel" aria-label="相机实时预览">
+        <div class="panel-heading"><span>实时画面</span><span id="resolution">等待相机</span></div>
+        <div class="viewport">
+          <img id="preview" src="/stream.mjpg" alt="主摄像头实时画面">
+          <div id="preview-message">正在连接板端相机…</div>
+        </div>
+        <p class="preview-note">预览经过压缩；拍照保存板端最新的完整原图，不包含界面文字。</p>
+      </section>
+      <aside>
+        <section class="capture-panel">
+          <div class="panel-heading"><span>本轮已保存</span><span>JPEG · 95</span></div>
+          <div class="counter"><strong id="count">0</strong><span>张照片</span></div>
+          <button id="capture" type="button" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l1.5-2h5L16 5h4a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2z"/><circle cx="12" cy="13" r="4"/></svg>
+            <span id="capture-label">拍照保存</span><kbd>Space</kbd>
+          </button>
+          <p id="feedback" role="status" aria-live="polite">等待相机就绪</p>
+          <div class="detail"><span>板端保存目录</span><code id="output-dir">读取中…</code></div>
+          <div class="detail"><span>相机设备</span><code id="device">读取中…</code></div>
+        </section>
+        <section class="last-panel">
+          <div class="panel-heading"><span>最近一次保存</span><span id="saved-size">—</span></div>
+          <div id="last-empty">拍下第一张照片后，在这里确认保存结果。</div>
+          <img id="last-photo" alt="最近保存的原图缩略图" hidden>
+          <code id="last-name"></code>
+        </section>
+      </aside>
+    </div>
+    <footer>保持本页面处于前台，按一次空格拍一张。每次启动工具会新建采集目录，退出请在板端按 Ctrl+C。</footer>
+  </main>
+</body>
+</html>

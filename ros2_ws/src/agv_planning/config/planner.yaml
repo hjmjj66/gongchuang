@@ -24,7 +24,7 @@ route_planner_node:               # 对应路径规划节点名称
 
     # 比赛相邻节点的默认行驶距离；修改后重启路径节点生效。
     # 所有未单独配置 edge_length_mm 的路段均使用此值，连续同向路段按实际边长累加。
-    default_edge_length_mm: 850  # 可调，单位：mm，须为正整数，例如改为 1000 即每边 1 m
+    default_edge_length_mm: 850  # 可调，单位：mm，须为正整数，例如改为 1000 即每边 1 m，正常应该是850。838
     # 可选：按实测距离覆盖单条道路长度，单位：mm，须为正整数。
     # 键名固定为“小编号_大编号”，仅支持地图中相邻节点，双向共用同一距离。
     # edge_length_mm:
@@ -45,18 +45,25 @@ route_planner_node:               # 对应路径规划节点名称
     execution_status_topic: /route/execution_status  # 执行状态输出，类型：agv_interfaces/msg/RouteExecutionStatus
 
     # 车体坐标：vx向前为正、vy向左为正（m/s），角速度逆时针为正（°/s）。
-    # 以下速度均填正的大小，前后左右及转向的正负由行动自动决定。
-    # 连续同类动作合并后只在整段末尾减速停车，例如两个前进合成2400mm。
-    translation_fast_mps: 0.5     # 平移匀速段速度v0，单位：m/s，须大于0
-    translation_slow_mps: 0.001     # 平移减速末端速度v1，单位：m/s，须大于0且不大于v0
-    translation_deceleration_mm: 150.0  # 剩余此距离开始匀减速，单位：mm；1200mm行程从1100mm开始减速
-    translation_arrival_tolerance_mm: 3.0  # 浮点数；剩余距离不大于此值即发零停车，单位：mm，可为0，须小于减速区和最短边长
+    # x/y位置环覆盖前后、横移、斜移；非行进轴也纠偏，过冲后允许反向修正。
+    # 位置环内部单位为m，配置的mm容差会换算为m；v = Kp * 位置误差 + Ki * 误差积分 - Kd * 实测速度。
+    # 两轴共用增益但分别积分、独立限幅；换算到当前车体系后再次限制vx/vy。
+    translation_pid_kp: 2.0       # 单位：1/s，须大于0；以下为待实车整定的初值
+    translation_pid_ki: 0.0       # 单位：1/s²，须非负；0表示暂不启用积分
+    translation_pid_kd: 0.1       # 无量纲，须非负
+    translation_max_vx_mps: 0.65  # 车体前后速度绝对值上限，单位：m/s，须大于0
+    translation_max_vy_mps: 0.35  # 车体左右速度绝对值上限，单位：m/s，须大于0
+    translation_arrival_tolerance_mm: 3.0  # 各轴允许误差±此值，单位：mm，可为0，须小于最短边长；两轴和角度均到达才完成
 
-    turn_fast_deg_s: 60.0        # 转动匀速段角速度，单位：°/s，须大于0
-    turn_slow_deg_s: 10.0         # 转动减速末端角速度，单位：°/s，须大于0且不大于匀速角速度
-    turn_deceleration_deg: 8.0    # 剩余此角度开始匀减速，单位：°；90°转向从85°开始，180°从175°开始
-    turn_arrival_tolerance_deg: 0.2  # 剩余角度不大于此值即发零停车，单位：°，可为0，须小于减速区和90°
+    # 前进、后退、横移、斜移和原地转向共用实时角度环；目标角度使用连续yaw，不作回绕。
+    # omega = Kp * 角度误差 + Ki * 误差积分 - Kd * 实测角速度，输出单位：°/s。
+    # 以下为待实车整定的初值；Ki=0表示暂不启用积分，输出饱和时限制积分累积。
+    angle_pid_kp: 2.0             # 单位：1/s，须大于0
+    angle_pid_ki: 0.0             # 单位：1/s²，须非负
+    angle_pid_kd: 0.1             # 无量纲，须非负；实测角速度由rad/s换算为°/s
+    angle_max_speed_deg_s: 120.0  # PID角速度绝对值上限，单位：°/s，须大于0
+    turn_arrival_tolerance_deg: 0.2  # 共用角度允许误差±此值，单位：°，可为0且须小于90；平移还需距离到达
 
     odometry_timeout_s: 0.5       # 里程反馈最大接收间隔，单位：秒，须大于0；超时停车并中止执行
-    motion_progress_timeout_s: 2.0  # 执行中路程或转角未推进的最大时长，单位：秒，须大于0；超时停车并中止
+    motion_progress_timeout_s: 2.0  # 任一未到达位置轴或角度的误差未缩小的最大时长，单位：秒，须大于0；超时停车并中止
     control_rate_hz: 50.0         # 运动控制循环频率，单位：Hz，须大于0

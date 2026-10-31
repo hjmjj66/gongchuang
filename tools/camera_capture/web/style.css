@@ -1,0 +1,47 @@
+:root { color-scheme: light; font-family: system-ui, -apple-system, "Noto Sans CJK SC", sans-serif; color: #203331; background: #f3f5f1; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1440px; margin: 0 auto; padding: 32px; }
+header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; gap: 16px; }
+.eyebrow { margin: 0 0 9px; font-size: 11px; letter-spacing: .18em; color: #75847b; font-weight: 650; }
+h1 { margin: 0; font-size: 27px; letter-spacing: -.04em; }
+.status { display: inline-flex; align-items: center; gap: 8px; color: #6d796f; font-size: 13px; background: #e7ece5; border-radius: 24px; padding: 9px 13px; }
+.status i { width: 7px; height: 7px; background: #89968a; border-radius: 50%; }
+.status.ready { color: #216e4c; background: #e1efe4; }
+.status.ready i { background: #2f9663; }
+.status.error { color: #a54536; background: #f6e5df; }
+.status.error i { background: #c25a44; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 342px; gap: 22px; align-items: start; }
+.preview-panel, .capture-panel, .last-panel { border: 1px solid #dde3da; border-radius: 14px; background: #fff; overflow: hidden; }
+.panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 17px 19px; font-size: 13px; font-weight: 600; }
+.panel-heading span:last-child { font-size: 11px; color: #7a8880; font-weight: 400; }
+.viewport { position: relative; aspect-ratio: 16 / 9; background: #152321; display: flex; align-items: center; justify-content: center; }
+#preview { display: block; width: 100%; height: 100%; object-fit: contain; color: #adbbb5; font-size: 13px; }
+#preview-message { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 30px; background: #152321d9; color: #c2d2c9; font-size: 14px; }
+#preview-message[hidden] { display: none; }
+.preview-note { color: #7a8880; font-size: 12px; line-height: 1.7; padding: 14px 19px; margin: 0; }
+aside { display: grid; gap: 18px; }
+.counter { padding: 0 20px 22px; display: flex; align-items: baseline; gap: 11px; }
+.counter strong { font-size: 58px; font-weight: 500; line-height: 1.1; letter-spacing: -.07em; }
+.counter span { font-size: 13px; color: #7a8880; }
+button { margin: 0 19px; padding: 15px; width: calc(100% - 38px); border: 0; border-radius: 8px; background: #d66d3e; color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 15px; font-weight: 600; cursor: pointer; }
+button:hover:enabled { background: #bc5830; }
+button:active:enabled { transform: translateY(1px); }
+button:focus-visible { outline: 3px solid #294c3e; outline-offset: 3px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+kbd { border: 1px solid #ffffff5e; border-radius: 4px; padding: 2px 5px; font-family: inherit; font-size: 10px; font-weight: 400; }
+#feedback { min-height: 41px; margin: 12px 20px 0; font-size: 12px; line-height: 1.7; color: #6d7d73; overflow-wrap: anywhere; }
+#feedback.success { color: #22714b; }
+#feedback.error { color: #ad4938; }
+.detail { padding: 14px 20px; border-top: 1px solid #edf0e9; }
+.detail > span { display: block; font-size: 11px; color: #7a8880; margin-bottom: 7px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.detail code { display: block; color: #50635a; }
+#last-empty { padding: 20px; font-size: 12px; line-height: 1.8; color: #8a978c; }
+#last-photo { display: block; width: calc(100% - 38px); margin: 0 19px; border-radius: 6px; }
+#last-photo[hidden] { display: none; }
+#last-name { display: block; padding: 10px 19px 18px; color: #65786b; }
+footer { padding-top: 24px; color: #879389; font-size: 12px; line-height: 1.8; }
+@media (max-width: 900px) { main { padding: 22px 16px; } .workspace { grid-template-columns: 1fr; } aside { grid-template-columns: 1fr 1fr; align-items: start; } }
+@media (max-width: 560px) { aside { grid-template-columns: 1fr; } h1 { font-size: 23px; } .status { font-size: 11px; padding: 8px 10px; } }

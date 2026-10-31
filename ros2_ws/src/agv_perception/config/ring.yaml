@@ -1,0 +1,56 @@
+# 参数在启动时读取；数值是调试起点，需用固定主相机实拍标定。
+ring_debug_node:
+  ros__parameters:
+    mode: combined                # combined / geometry_only（仅静态图手动 ROI）
+    model_path: ""                # 等待用户训练后的模型，不下载或借用开源权重
+    model_format: ""              # 部署格式待真实模型到位后接入
+    class_labels: ["1", "2", "3"] # 未来核对模型实际类别顺序
+    confidence_threshold: 0.5
+    roi_padding_ratio: 0.08
+    minimum_roi_size_px: 20
+    border_tolerance_px: 1.0
+    allow_bbox_fallback: true
+
+    input_image: ""               # 非空则只处理一张图片
+    manual_roi: []                # geometry_only 必填 [x1,y1,x2,y2]，整数原图坐标
+    manual_ring_id: 0              # 0 表示不指定；1/2/3 仅手动提示，非自动识别
+    show_preview: false
+    output_dir: ""                # 非空时保存 JSON 与图片；相机会追加 results.jsonl
+    save_every_n_frames: 0         # 相机抽样保存图片，0 关闭；静态图始终保存
+
+    # 设备路径来自历史 C100 检查记录，现场请核对；不使用扫码相机配置。
+    camera_device: /dev/v4l/by-id/usb-HJ_USB_2.0_Camera_HJ_USB_2.0_Camera_SN0001-video-index0
+    camera_width: 1280
+    camera_height: 720
+    camera_fps: 30.0
+    camera_buffer_size: 4
+    camera_dynamic_framerate: false
+    process_rate_hz: 15.0
+    max_frame_age_s: 0.5
+    camera_start_timeout_s: 10.0
+
+    geometry.preprocess: gray      # gray / binary_morphology
+    geometry.blur_kernel: 5
+    geometry.blur_sigma: 1.2
+    geometry.binary_threshold: 100 # binary_morphology 使用暗色反二值化
+    geometry.morphology_kernel: 3
+    geometry.open_iterations: 0
+    geometry.close_iterations: 1
+    geometry.hough_dp: 1.0
+    geometry.hough_min_distance_px: 4.0
+    geometry.hough_param1: 100.0
+    geometry.hough_param2: 25.0
+    geometry.min_radius_ratio: 0.12 # 半径 / 原检测框短边
+    geometry.max_radius_ratio: 0.55
+    geometry.max_center_offset_ratio: 0.25
+    geometry.edge_low_threshold: 50.0
+    geometry.edge_high_threshold: 100.0
+    geometry.circumference_samples: 180
+    geometry.radial_tolerance_px: 3
+    geometry.min_edge_support: 0.55
+    geometry.angle_sectors: 12
+    geometry.sector_support_threshold: 0.4
+    geometry.min_supported_sectors: 8
+    geometry.merge_distance_ratio: 0.04 # 组内最大中心距离 / 原检测框短边
+    geometry.duplicate_radius_tolerance_px: 2.0
+    geometry.group_ambiguity_margin: 0.04

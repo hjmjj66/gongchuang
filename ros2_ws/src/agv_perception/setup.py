@@ -16,7 +16,10 @@ setup(
     zip_safe=True,
     maintainer='AGV Team',
     maintainer_email='team@example.com',
-    description='USB camera QR scanner using preprocessing and ZBar',
+    description='USB camera QR scanning and numbered ring geometry tools',
     license='Apache-2.0',
-    entry_points={'console_scripts': ['qr_node = agv_perception.qr_node:main']},
+    entry_points={'console_scripts': [
+        'qr_node = agv_perception.qr_node:main',
+        'ring_debug_node = agv_perception.ring_debug_node:main',
+    ]},
 )

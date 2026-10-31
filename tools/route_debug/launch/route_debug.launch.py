@@ -40,6 +40,9 @@ def setup(context):
     controller_cmd = ['/usr/bin/python3', '-m', 'route_debug.node',
                       '--planner-config', get('planner_config'), '--debug-config', get('debug_config'),
                       '--mission-config', get('mission_config')]
+    controller_cmd.extend(['--screen-config', get('screen_config')])
+    if get('screen_port'):
+        controller_cmd.extend(['--screen-port', get('screen_port')])
     for name in ('host', 'port'):
         if get(name):
             controller_cmd.extend(['--' + name, get(name)])
@@ -56,6 +59,8 @@ def generate_launch_description():
                     mission_config=str(ROOT / 'ros2_ws/src/agv_mission/config/mission.yaml'),
                     cboard_config=str(ROOT / 'ros2_ws/src/agv_cboard/config/cboard.yaml'),
                     debug_config=str(TOOL / 'config/debug.yaml'),
+                    screen_config=str(ROOT / 'ros2_ws/src/agv_screen/config/screen.yaml'),
+                    screen_port='',
                     serial_port='', host='', port='')
     return LaunchDescription([DeclareLaunchArgument(k, default_value=v) for k, v in defaults.items()] +
                              [OpaqueFunction(function=setup)])

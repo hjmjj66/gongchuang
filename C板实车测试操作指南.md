@@ -331,7 +331,7 @@ ros2 run agv_cboard cboard_diagnostics monitor \
 
 ### 8.1 直接修改 planner.yaml
 
-浏览器工具默认直接读取 `/root/工创/ros2_ws/src/agv_planning/config/planner.yaml`。速度、减速区、到达容差和道路长度都在这个文件中修改：
+浏览器工具默认直接读取 `/root/工创/ros2_ws/src/agv_planning/config/planner.yaml`。位置PID、vx/vy独立速度上限、角度PID、角速度上限、到达容差和道路长度都在这个文件中修改：
 
 ```bash
 nano /root/工创/ros2_ws/src/agv_planning/config/planner.yaml
@@ -340,13 +340,20 @@ nano /root/工创/ros2_ws/src/agv_planning/config/planner.yaml
 保留 `route_planner_node` → `ros__parameters` 层级，在其中按实际需要调整参数。当前路线速度配置为：
 
 ```yaml
-translation_fast_mps: 0.8
-translation_slow_mps: 0.5
-turn_fast_deg_s: 60.0
-turn_slow_deg_s: 30.0
+translation_pid_kp: 2.0
+translation_pid_ki: 0.0
+translation_pid_kd: 0.1
+translation_max_vx_mps: 0.7
+translation_max_vy_mps: 0.4
+translation_arrival_tolerance_mm: 3.0
+angle_pid_kp: 2.0
+angle_pid_ki: 0.0
+angle_pid_kd: 0.1
+angle_max_speed_deg_s: 120.0
+turn_arrival_tolerance_deg: 0.5
 ```
 
-单边默认 1200 mm，减速区和到达容差也由此文件决定；按实际运行速度留足空间。
+当前配置单边850 mm。直线和斜移均由x/y位置PID控制，非行进轴也实时纠偏，车体vx绝对值上限0.7 m/s、vy绝对值上限0.4 m/s；到站过冲后允许反向修正至各轴±3 mm内。角度PID继续锁头，角速度上限120°/s，当前角度误差配置为±0.5°。两条位置轴与角度均到达才结束动作，位置到达后再次偏离仍会继续修正。PID数值为待实车整定的初值，Ki=0表示暂不使用积分。
 
 参数在启动时读取。保存后按第 8.2 节启动；如果工具已运行，先在终端按 `Ctrl+C` 结束，再重新启动。仅修改这个 YAML 无需重新构建。后续自由行走和模拟比赛都会使用该文件中的最新配置。
 
@@ -361,9 +368,9 @@ cd /root/工创
   port:=8080
 ```
 
-打开 `http://127.0.0.1:8080`。其他电脑使用 `http://小车IP:8080`。页面四项健康状态都应为正常：C 板连接、PC 控制、有效里程、运动许可。
+打开 `http://127.0.0.1:8080`。其他电脑使用 `http://小车IP:8080`。页面四项健康状态都应为正常：C 板连接、PC 控制、有效里程、运动许可。无线ssh时为http://10.157.133.165:8080/
 
-在页面“实际加载的运动配置”确认来源为上述 `planner.yaml`，并核对平移、转动快慢速与文件中的设置一致。
+在页面“实际加载的运动配置”确认来源为上述 `planner.yaml`，并核对位置PID、vx/vy独立速度上限、角度PID、角速度上限及允许误差与文件中的设置一致。
 
 首次自由行走：
 
@@ -373,7 +380,7 @@ cd /root/工创
 4. 第一次不勾选“到终点后按固定工作方向对齐”。
 5. 点击“启动”。
 
-预期：`初始化中 → 导航中 → 已完成`。这一段应向当前车头前方行驶，下发 `vx>0、vy=0、omega=0`；若本次 PC 会话刚在当前姿态建立，位置主要增加固定 x。页面检查固定系 x/y、实际速度、指令速度、本段投影进度、横向偏差、会话/代次；完成后速度归零，轨迹按实测 x/y 绘制而不是吸附到终点。
+预期：`初始化中 → 导航中 → 已完成`。这一段应沿初始车头前方行驶，位置与航向无偏差时下发 `vx>0、vy=0、omega=0`；侧向偏移会产生vy纠偏，角度偏差会产生角速度修正，平移速度也会换算到当前车体系，因此vy可以非零。到站过冲时vx可以短暂反向。若本次 PC 会话刚在当前姿态建立，位置主要增加固定 x。页面检查固定系 x/y、实际速度、指令速度、本段投影进度、横向偏差、会话/代次；两条位置轴和角度均到达后速度归零，轨迹按实测 x/y 绘制而不是吸附到终点。
 
 需要提前停下时点击“停止”，必要时遥控接管。停止、切 RC、串口重连或会话变化后旧任务不会续跑；确认实际位置和朝向后重新选择并启动。
 

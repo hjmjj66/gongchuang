@@ -4,6 +4,7 @@ import json
 import math
 import os
 from pathlib import Path
+import queue
 import signal
 import socket
 import subprocess
@@ -28,6 +29,7 @@ class MovingBoard:
         os.set_blocking(self.master, False)
         self.closed = threading.Event()
         self.frames = []
+        self.shifts = queue.SimpleQueue()
         self.send_odom = True
         self.source = 2
         self.thread = threading.Thread(target=self.run, daemon=True)
@@ -62,6 +64,10 @@ class MovingBoard:
                     x += (math.cos(yaw) * vx - math.sin(yaw) * vy) * dt
                     y += (math.sin(yaw) * vx + math.cos(yaw) * vy) * dt
                     yaw += wz * dt
+                while not self.shifts.empty():
+                    dx, dy = self.shifts.get_nowait()
+                    x += dx
+                    y += dy
                 tick = int((now - board_start) * 1000)
                 if now >= next_status:
                     os.write(self.master, encode_frame(STATUS, STATUS_STRUCT.pack(
@@ -89,15 +95,19 @@ class MovingBoard:
 class RosPtyTests(unittest.TestCase):
     def test_browser_to_real_planner_and_bridge(self):
         board = MovingBoard()
+        screen_master, screen_slave = os.openpty()
+        self.addCleanup(os.close, screen_slave)
+        self.addCleanup(os.close, screen_master)
         process = None
         succeeded = False
         with tempfile.TemporaryDirectory(prefix='route_debug_pty_') as temp:
             directory = Path(temp)
             planner = yaml.safe_load((ROOT / 'ros2_ws/src/agv_planning/config/planner.yaml').read_text())
             params = planner['route_planner_node']['ros__parameters']
-            params.update(default_edge_length_mm=150, translation_fast_mps=.5,
-                          translation_slow_mps=.15, translation_deceleration_mm=40.,
-                          turn_fast_deg_s=360., turn_slow_deg_s=180.,
+            params.update(default_edge_length_mm=150, translation_max_vx_mps=.65,
+                          translation_max_vy_mps=.35,
+                          translation_pid_kp=8.,
+                          angle_pid_kp=8., angle_max_speed_deg_s=120.,
                           turn_arrival_tolerance_deg=1., odometry_timeout_s=.5)
             planner_file = directory / 'planner.yaml'
             planner_file.write_text(yaml.safe_dump(planner))
@@ -130,6 +140,10 @@ class RosPtyTests(unittest.TestCase):
                         self.fail('launch exited early')
                     try:
                         last = snapshot()
+                        blocked = {tuple(sorted(edge)) for edge in (last.get('settings') or {}).get('blocked_edges', [])}
+                        nodes = (last.get('plan') or {}).get('nodes', [])
+                        for a, b in zip(nodes, nodes[1:]):
+                            self.assertNotIn(tuple(sorted((a, b))), blocked)
                         if predicate(last):
                             return last
                     except (OSError, ValueError):
@@ -162,10 +176,13 @@ class RosPtyTests(unittest.TestCase):
                 env = dict(os.environ, ROS_LOG_DIR=str(directory / 'ros_logs'))
                 process = subprocess.Popen([str(TOOL / 'start.sh'), 'host:=127.0.0.1', f'port:={port}',
                     f'serial_port:={board.path}', f'planner_config:={planner_file}',
+                    f'screen_port:={os.ttyname(screen_slave)}',
                     f'mission_config:={mission_file}'],
                     env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 initial = wait_for(lambda s: s.get('preflight_reason') == '', 15)
-                self.assertEqual(initial['config']['translation_fast_mps'], .5)
+                self.assertEqual(initial['config']['translation_max_vx_mps'], .65)
+                self.assertEqual(initial['config']['translation_max_vy_mps'], .35)
+                self.assertEqual(initial['config']['translation_pid_kp'], 8.)
                 self.assertEqual(initial['config']['parking_offset_mm'], 275)
                 self.assertEqual(initial['config']['mission_source'], str(mission_file))
                 heartbeat_thread.start()
@@ -185,6 +202,20 @@ class RosPtyTests(unittest.TestCase):
                 for vx, vy, wz, mode in moving:
                     self.assertGreater(vx, 0.)
                     self.assertEqual((vy, wz), (0., 0.))
+                # Move beyond the XY goal while driving: both axes must reverse and recover.
+                command('start', dict(mode='free', start=1, goal=3, heading='DOWN', align=False))
+                driving = wait_for(lambda s: s['state'] == 'NAVIGATING' and s.get('segment') and
+                                   s['segment']['progress'] > 10.)
+                target_x = driving['segment']['baseline_x_m'] + .3
+                target_y = driving['segment']['baseline_y_m']
+                frame_start = len(board.frames)
+                board.shifts.put((.35, .04))
+                corrected = wait_for(lambda s: s['state'] in ('FINISHED', 'FAULT'), 10)
+                self.assertEqual(corrected['state'], 'FINISHED', corrected)
+                recovery = [cmd for _, cmd in board.frames[frame_start:] if cmd[3] == 1]
+                self.assertTrue(any(vx < 0. and vy < 0. for vx, vy, _, _ in recovery))
+                self.assertLessEqual(abs(corrected['odometry']['x_m'] - target_x), .005)
+                self.assertLessEqual(abs(corrected['odometry']['y_m'] - target_y), .005)
                 # Optional free-mode exits honor the selected heading, then align only at node 2.
                 for start, heading, sx, sy in ((1, 'RIGHT', -1, -1), (3, 'LEFT', 1, -1)):
                     frame_start = len(board.frames)
@@ -216,10 +247,26 @@ class RosPtyTests(unittest.TestCase):
                 self.assertGreater(len(finished['trace']), 1)
                 self.assertEqual(finished['plan']['nodes'], [7,8,9])
                 self.assertTrue(any(frame[1][3] == 1 for frame in board.frames))
+                # The same numbered obstacle blocks travel in both directions.
+                for start, goal in ((7,8), (8,7)):
+                    command('start', dict(mode='free', start=start, goal=goal, heading='DOWN',
+                                          blocked_edges=[[7,8]]))
+                    detour = wait_for(lambda s: s['state'] in ('FINISHED','FAULT'), 10)
+                    self.assertEqual(detour['state'], 'FINISHED', detour)
+                    self.assertEqual(detour['plan']['nodes'], [7,4,5,8] if start == 7 else [8,5,4,7])
+                    self.assertEqual(detour['settings']['blocked_edges'], [[7,8]])
+                # Disconnect the start: the real planner must reject without driving.
+                frame_start = len(board.frames)
+                command('start', dict(mode='free', start=1, goal=2, heading='DOWN',
+                                      blocked_edges=[[1,2],[1,4]]))
+                unreachable = wait_for(lambda s: s['state'] == 'FAULT', 10)
+                self.assertIn('规划失败', unreachable['reason'])
+                self.assertEqual(unreachable['command'], [0.,0.,0.])
+                self.assertFalse(any(cmd[3] == 1 for _, cmd in board.frames[frame_start:]))
                 # Full run preserves the real three-second waits.
                 race = dict(mode='competition', start=3, goal=1, heading='UP', align=False)
                 frame_start = len(board.frames)
-                command('start', race)
+                command('start', dict(race, blocked_edges=[[2,3]]))
                 exiting = wait_for(lambda s: s['state'] == 'NAVIGATING' and
                                    s['parking_maneuver'] == 'EXIT' and s['plan'])
                 self.assertEqual(exiting['route_index'], 0)
@@ -228,6 +275,8 @@ class RosPtyTests(unittest.TestCase):
                 self.assertEqual(exiting['plan']['actions'][0]['distance_mm'], 275)
                 self.assertEqual(exiting['plan']['actions'][0]['opcode'], 7)
                 self.assertEqual(len(exiting['plan']['display_points']), 2)
+                qr_wait = wait_for(lambda s: s['state'] == 'WAITING', 12)
+                self.assertEqual(qr_wait['plan']['nodes'], [3,6,5,2])
                 finished = wait_for(lambda s: s['state'] in ('FINISHED', 'FAULT'), 55)
                 self.assertEqual(finished['state'], 'FINISHED', finished)
                 self.assertEqual(finished['route_index'], 9)
@@ -281,6 +330,54 @@ class RosPtyTests(unittest.TestCase):
                 command('start',free)
                 restarted=wait_for(lambda s:s['state'] in ('FINISHED','FAULT'),10)
                 self.assertEqual(restarted['state'],'FINISHED',restarted)
+                # The screen config is gated by the web start; it uses the real planner.
+                screen = dict(mode='screen')
+                os.write(screen_master, b'ROUTE,1\r\nCFG,1,2\r\n')
+                command('start', screen)
+                setup = wait_for(lambda s: s['state'] == 'SCREEN_SETUP' and s['screen']['accepting'])
+                self.assertNotIn('start', setup['settings'])
+                frame_start = len(board.frames)
+                os.write(screen_master, b'ROUTE,10\r\n')
+                wait_for(lambda s: s['settings']['blocked_edges'] == [[2,3]])
+                accepted_at = time.monotonic()
+                os.write(screen_master, b'CFG,2,1\r\n')
+                init = wait_for(lambda s: s['state'] == 'INITIALIZING')
+                self.assertEqual(init['settings']['start'], 3)
+                self.assertEqual(init['settings']['goal'], 1)
+                self.assertEqual(init['settings']['heading'], 'UP')
+                # Duplicates after submission must not change this round.
+                os.write(screen_master, b'ROUTE\r\nCFG,1,2\r\n')
+                screen_exit = wait_for(lambda s: s['state'] == 'NAVIGATING' and s['plan'], 8)
+                self.assertGreaterEqual(time.monotonic() - accepted_at, 2.)
+                self.assertEqual(screen_exit['settings']['blocked_edges'], [[2,3]])
+                self.assertEqual(screen_exit['plan']['nodes'], [3])
+                self.assertEqual(screen_exit['parking_maneuver'], 'EXIT')
+                screen_done = wait_for(lambda s: s['state'] in ('FINISHED','FAULT'), 65)
+                self.assertEqual(screen_done['state'], 'FINISHED', screen_done)
+                self.assertEqual(screen_done['route_index'], 9)
+                self.assertEqual(screen_done['settings']['goal'], 1)
+                self.assertTrue(screen_done['screen_needs_reset'])
+                moving = [(at, cmd) for at, cmd in board.frames[frame_start:] if cmd[3] == 1]
+                self.assertTrue(moving)
+                self.assertTrue(all(at - accepted_at >= 2. for at, _ in moving))
+                command('reset', screen)
+                wait_for(lambda s: s['state'] == 'IDLE' and not s['screen_needs_reset'])
+                os.write(screen_master, b'ROUTE\r\nCFG,1,2\r\n')
+                command('start', screen)
+                wait_for(lambda s: s['state'] == 'SCREEN_SETUP' and s['screen']['accepting'])
+                os.write(screen_master, b'ROUTE\r\nCFG,1,2\r\n')
+                wait_for(lambda s: s['state'] == 'INITIALIZING')
+                command('stop', screen)
+                stopped = wait_for(lambda s: s['state'] == 'STOPPED')
+                self.assertFalse(stopped['screen']['accepting'])
+                frame_start = len(board.frames)
+                os.write(screen_master, b'ROUTE\r\nCFG,2,1\r\n')
+                # A fresh web reset/start is required after emergency stop.
+                time.sleep(2.1)
+                self.assertEqual(snapshot()['state'], 'STOPPED')
+                self.assertFalse(any(cmd[3] == 1 for _, cmd in board.frames[frame_start:]))
+                command('reset', screen)
+                wait_for(lambda s: s['state'] == 'IDLE')
                 # Browser heartbeat loss cancels a running route (no resume).
                 command('start', race)
                 wait_for(lambda s: s['state'] == 'WAITING', 8)
@@ -289,6 +386,9 @@ class RosPtyTests(unittest.TestCase):
                 self.assertIn('页面失联', lost['reason'])
                 self.assertEqual(lost['command'], [0.,0.,0.])
                 self.assertIsNone(board.error)
+                for _, (vx, vy, _, _) in board.frames:
+                    self.assertLessEqual(abs(vx), .65 + 1e-6)
+                    self.assertLessEqual(abs(vy), .35 + 1e-6)
                 succeeded = True
             finally:
                 alive.clear()

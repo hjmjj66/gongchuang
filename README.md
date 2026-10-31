@@ -9,7 +9,7 @@
 - `ros2_ws/src/agv_cboard`：底盘串口通信、反馈与诊断。
 - `ros2_ws/src/agv_mission`：比赛流程调度。
 - `ros2_ws/src/agv_screen`：屏幕禁行路径、起终点及启动交互、扫码结果展示，见 [屏幕接入说明](ros2_ws/src/agv_screen/README.md)。
-- `ros2_ws/src/agv_perception`：二维码相机与识别。
+- `ros2_ws/src/agv_perception`：二维码识别、圆环几何定位与图片调试；自动编号等待训练模型，见[视觉工具说明](ros2_ws/src/agv_perception/README.md)。
 - `tools/route_debug`：网页路线调试工具。
 - `docs`：设计方案、实施和检查记录。
 
