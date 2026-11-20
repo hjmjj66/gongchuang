@@ -32,6 +32,14 @@
       </div>
       <label class="checkbox" id="align-row"><input type="checkbox" id="align">到终点后按固定工作方向对齐</label>
       <label class="checkbox" id="exit-start-row"><input type="checkbox" id="exit-start">起步斜移出启停区（仅起点1或3）</label>
+      <div id="work-alignment-row" hidden>
+        <button type="button" id="work-alignment" aria-pressed="false">纠偏与2号环对准：关闭</button>
+        <p class="hint" id="work-alignment-hint">开启后，两次粗加工、首次暂存执行WORK → 纠偏 → 记录P0 → 对准2号环；粗加工再恢复WORK并做末次纠偏，之后INIT收纳 → 返回P0并停车，继续路线。</p>
+      </div>
+      <div id="real-qr-row" hidden>
+        <button type="button" id="real-qr" aria-pressed="false">真实扫码：关闭</button>
+        <p class="hint">开始前开启，到二维码区停好后真实扫码，连续5帧一致并校验任务码后显示到网页和触屏，再继续路线。未识别到时停车等待，可随时停止。</p>
+      </div>
       <p class="hint" id="mode-hint"></p>
       <p class="hint" id="screen-status" hidden></p>
       <div class="map-status" id="map-status"><span class="dot"></span><span id="blocked-summary" role="status" aria-live="polite">全部道路畅通</span><button type="button" id="clear-blocked" disabled>清空选择</button></div>
@@ -43,16 +51,48 @@
     <section class="card">
       <div class="panel-title"><h2>执行状态</h2><span class="pill" id="state">待命</span></div>
       <p class="stage" id="stage">等待连接</p><p class="hint" id="ready-reason"></p>
+      <p class="hint" id="work-diagnostic" hidden></p>
       <div class="metrics"><div><span>导航段</span><strong id="route-count">—</strong></div><div><span>等待剩余</span><strong id="countdown">—</strong></div><div><span>运行耗时</span><strong id="elapsed">0.0 s</strong></div></div>
-      <dl><dt>目标 / 路线</dt><dd id="route">—</dd><dt>固定系位置 x / y（初始前 / 左）</dt><dd id="distance">—</dd><dt>连续 yaw</dt><dd id="yaw">—</dd><dt>指令速度（前 vx / 左 vy / 转）</dt><dd id="speed">—</dd></dl>
+      <dl><dt>本轮真实扫码结果</dt><dd id="qr-result">—</dd><dt>目标 / 路线</dt><dd id="route">—</dd><dt>固定系位置 x / y（初始前 / 左）</dt><dd id="distance">—</dd><dt>连续 yaw</dt><dd id="yaw">—</dd><dt>指令速度（前 vx / 左 vy / 转）</dt><dd id="speed">—</dd></dl>
       <dl><dt>实际速度（前 vx / 左 vy / 转）</dt><dd id="actual-speed">—</dd><dt>坐标 / 许可代次</dt><dd id="coordinate">—</dd><dt>本段进度</dt><dd id="segment-progress">—</dd></dl>
       <div class="health-grid"><span id="board-link">C板 —</span><span id="pc-control">PC控制 —</span><span id="odom-health">里程 —</span><span id="motion-health">运动许可 —</span></div>
       <p class="hint" id="board-reason"></p>
       <details><summary>实际加载的运动配置</summary><p class="hint" id="config-values">—</p><p class="path" id="config-path"></p></details>
     </section>
+    <section class="card" id="recording-panel">
+      <div class="panel-title"><h2>行走数据记录</h2><span class="tag">50 ms / 次</span></div>
+      <label class="checkbox"><input type="checkbox" id="recording-enabled" disabled>记录本次行走数据</label>
+      <p class="hint">开始前开启；每次开始单独生成记录，包含导航参数、目标与实际误差、指令与实测速度。结束或停止后可下载，供分析调参。</p>
+      <p id="recording-status" class="hint" role="status" aria-live="polite">记录关闭</p>
+      <p id="recording-path" class="path"></p>
+      <details><summary>下载行走记录（最近20份）</summary><div id="recording-files"></div></details>
+    </section>
+    <section class="card" id="motion-panel">
+      <div class="panel-title"><h2>导航参数</h2><span class="tag">停止后保存</span></div>
+      <p class="hint">保存到当前加载的规划配置，并用于下一次路线；正式比赛重启后读取。容差越小，到达要求越严，通常需要更长时间。</p>
+      <form id="motion-form">
+        <fieldset><legend>位置控制（前后 / 横移 / 斜移）</legend><div class="fields">
+          <label>位置 Kp（1/s）<input id="motion-translation_pid_kp" type="number" step="any" min="0" required disabled></label>
+          <label>位置 Ki（1/s²）<input id="motion-translation_pid_ki" type="number" step="any" min="0" required disabled></label>
+          <label>位置 Kd<input id="motion-translation_pid_kd" type="number" step="any" min="0" required disabled></label>
+          <label>前后速度上限（m/s）<input id="motion-translation_max_vx_mps" type="number" step="any" min="0" required disabled></label>
+          <label>横移速度上限（m/s）<input id="motion-translation_max_vy_mps" type="number" step="any" min="0" required disabled></label>
+          <label>各轴到达容差（±mm）<input id="motion-translation_arrival_tolerance_mm" type="number" step="any" min="0" required disabled></label>
+        </div></fieldset>
+        <fieldset><legend>角度控制（转向 / 平移锁头）</legend><div class="fields">
+          <label>角度 Kp（1/s）<input id="motion-angle_pid_kp" type="number" step="any" min="0" required disabled></label>
+          <label>角度 Ki（1/s²）<input id="motion-angle_pid_ki" type="number" step="any" min="0" required disabled></label>
+          <label>角度 Kd<input id="motion-angle_pid_kd" type="number" step="any" min="0" required disabled></label>
+          <label>角速度上限（°/s）<input id="motion-angle_max_speed_deg_s" type="number" step="any" min="0" required disabled></label>
+          <label>角度到达容差（±°）<input id="motion-turn_arrival_tolerance_deg" type="number" step="any" min="0" required disabled></label>
+        </div></fieldset>
+        <div class="actions"><button id="motion-save" class="primary" type="submit" disabled>保存并应用导航参数</button><button id="motion-reset" type="button" disabled>恢复已加载值</button></div>
+      </form>
+      <p id="motion-message" class="hint" role="status" aria-live="polite">等待规划配置</p>
+    </section>
     <section class="card log-card"><div class="panel-title"><h2>事件记录</h2><span class="subtle">最近80条</span></div><ol id="logs"></ol></section>
   </aside>
 </main>
-<footer>作业时车头方向：二维码2 ↓ 下（左侧作业） · 原料4 ← 左 · 粗加工6 → 右 · 暂存8 ↓ 下（后三者右侧作业）。图中位置为里程估算。</footer>
+<footer>作业时车头方向：二维码2 → 右（车体X轴正方向朝向扫码区） · 原料4 ← 左 · 粗加工6 → 右 · 暂存8 ↓ 下（后三者右侧作业）。图中位置为里程估算。</footer>
 <script src="/app.js"></script>
 </body></html>

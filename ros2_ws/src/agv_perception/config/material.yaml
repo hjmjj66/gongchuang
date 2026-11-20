@@ -1,0 +1,231 @@
+# 物料检测 ROS 参数配置；启动时读取，修改后需重启节点/工具。
+# 颜色编号：1 红、2 黄、3 蓝、4 绿、5 黑、6 浅蓝；输出坐标均对应原图像素。
+material_debug_node:
+  ros__parameters:
+    # 两个参数互相独立；仅 YOLO 后端使用 material_model。
+    material_backend: 2        # 1 HSV；2 YOLO
+    material_model: 1          # 1 顶面；2 整体
+    target_color_id: 0         # 0 返回全部；1～6 只返回指定色
+    search_roi: []             # 原图 [x1,y1,x2,y2]；空为全图
+
+    # 原六色 YOLO 的部署格式，当前仅支持 rdk_yolov8_bin；JHB 模型由自身文件后缀决定运行方式。
+    model_format: rdk_yolov8_bin
+    # 原六色 YOLO 使用的 rdk_model_zoo 根目录；切换部署目录时需同步更新。
+    model_runtime_path: /root/material_deploy_v1/rdk_model_zoo
+    # 六色顶面模型的 X5 INT8 BIN 路径，仅原 YOLO 顶面分支加载。
+    top.model_path: /root/material_deploy_v1/export/upper_top/compiled_int8/upper_top_bayese_640x640_nv12.bin
+    # 顶面模型类别文件，顺序须与下方 class_labels 及训练类别一致。
+    top.classes_path: /root/material_deploy_v1/export/upper_top/classes.txt
+    # 按模型索引排列：红、黄、蓝、绿、黑、浅蓝；不可按显示习惯重新排序。
+    top.class_labels: [red_top, yellow_top, blue_top, green_top, black_top, lightblue_top]
+    # 六色整体模型的 X5 INT8 BIN 路径，仅原 YOLO 整体分支加载。
+    whole.model_path: /root/material_deploy_v1/export/whole/compiled_int8/whole_bayese_640x640_nv12.bin
+    # 整体模型类别文件，顺序须与下方 class_labels 一致。
+    whole.classes_path: /root/material_deploy_v1/export/whole/classes.txt
+    # 整体模型索引也按红、黄、蓝、绿、黑、浅蓝排列；颜色编号固定为 1～6。
+    whole.class_labels: [red, yellow, blue, green, black, lightblue]
+    # 原六色 YOLO 置信度门槛 [0,1]；提高可过滤低分框，也可能漏检。
+    confidence_threshold: 0.6
+    # 原六色 YOLO 同类 NMS 的 IoU 门槛 [0,1]；降低会更积极抑制重叠框。
+    nms_threshold: 0.7
+
+    # 顶面是否进行几何圆心精修；JHB/组合分支也读取此开关，整体模型不找圆。
+    top.refine_circle: true    # false：顶面也只取框中心，供效果/耗时对比
+    # 几何失败时是否允许使用框中心；仍须先通过相应分支的触边/配对等检查。
+    top.allow_bbox_fallback: true
+    # 几何 ROI 每侧扩展比例：左右各加框宽 × 此值，上下各加框高 × 此值，再裁到图内。
+    top.roi_padding_ratio: 0.08
+    # 扩展裁剪后的 ROI 最小宽高，单位 px；过小不找圆，再按框中心退化开关处理。
+    top.minimum_roi_size_px: 20
+    # 原六色/HSV 候选距搜索 ROI 任一边界的触边容差，单位原图 px；触边观测无效。
+    border_tolerance_px: 1.0
+
+    # 原六色顶面霍夫找圆的高斯核边长，单位 px，须为正奇数；以下 top_circle.* 不控制 JHB 几何。
+    top_circle.blur_kernel: 5
+    # 高斯标准差，单位 px，非负；0 由 OpenCV 自动估计。
+    top_circle.blur_sigma: 1.2
+    # 霍夫累加器分辨率比，须 >= 1；增大可降低累加器分辨率，圆心候选更粗。
+    top_circle.hough_dp: 1.0
+    # 霍夫候选最小圆心间距，单位 px；太小会产生更多相近候选。
+    top_circle.hough_min_distance_px: 10.0
+    # 霍夫及圆周检查使用的 Canny 高阈值；低阈值取一半，提高可过滤弱边缘。
+    top_circle.hough_param1: 100.0
+    # 霍夫圆心累加器门槛；降低更容易出圆，也会增加错误/重复候选。
+    top_circle.hough_param2: 25.0
+    # 最小半径 ÷ 原始顶面框短边，须 > 0；下限向上取整且至少 1 px。
+    top_circle.min_radius_ratio: 0.35
+    # 最大半径 ÷ 原始顶面框短边，不得小于下限；上限向下取整。
+    top_circle.max_radius_ratio: 0.55
+    # 候选圆心距原框中心的最大距离 ÷ 原框短边；增大可容许更大偏移。
+    top_circle.max_center_offset_ratio: 0.2
+    # 圆周 72 个采样角中命中边缘的最低比例 [0,1]；提高会更严格。
+    top_circle.min_edge_support: 0.5
+    # 圆周边缘检查的半径 ± 容差，单位 px，非负整数；增大更宽容。
+    top_circle.edge_radial_tolerance_px: 2
+    # 重复圆候选的圆心距离上限，单位 px；须同时满足下方半径差条件才合并。
+    top_circle.duplicate_center_distance_px: 2.0
+    # 重复圆候选的半径差上限，单位 px；重复候选保留质量较好者。
+    top_circle.duplicate_radius_difference_px: 2.0
+    # 最优与次优非重复圆的评分差 <= 此值则判为歧义；非概率，增大更谨慎。
+    top_circle.ambiguity_margin: 0.03
+
+    # zuixin.py 的阈值起点；每 6 个整数为一个区间。
+    # 以下区间仅 HSV 后端生效；每组为 [H低,S低,V低,H高,S高,V高]，多组取并集。
+    # OpenCV H 范围 0～179，S/V 为 0～255；红色用两组覆盖色相首尾，[] 表示该色未配置。
+    hsv.red_ranges: [0,80,80,10,255,255, 174,135,58,179,237,198]
+    # 黄色 HSV 区间，格式同红色。
+    hsv.yellow_ranges: [12,117,114,34,224,209]
+    # 蓝色 HSV 区间，格式同红色。
+    hsv.blue_ranges: [81,94,10,129,255,132]
+    # 绿色 HSV 区间，格式同红色。
+    hsv.green_ranges: [41,117,38,70,201,183]
+    # 黑色 HSV 区间，格式同红色。
+    hsv.black_ranges: [0,0,17,135,79,40]
+    # 浅蓝色 HSV 区间，颜色编号 6；light_blue 与模型标签 lightblue 对应同一颜色。
+    hsv.light_blue_ranges: [72,71,63,179,163,209]
+    # HSV 外轮廓最小面积，单位 px²；过滤小面积噪点，输出中心为轮廓质心。
+    hsv.min_contour_area_px2: 100.0
+    # 外轮廓面积占搜索 ROI 图像面积的上限，范围 [0,1]；0 关闭面积上限。
+    hsv.max_contour_area_ratio: 0.0
+    # 掩膜形态学方形核边长，单位 px，正奇数；仅下方迭代次数非零时生效。
+    hsv.morphology_kernel: 3
+    # 先开运算的次数，非负整数；0 关闭，用于去除零散前景噪点。
+    hsv.open_iterations: 0
+    # 后闭运算的次数，非负整数；0 关闭，用于补小孔，也可能粘连相邻目标。
+    hsv.close_iterations: 0
+    # 异色掩膜交集 / 两者较小前景面积的门槛；达到后双方判为颜色歧义，不按框 IoU 计算。
+    hsv.color_overlap_threshold: 0.6
+
+    # ROS 调试模式；geometry_only 需同时提供静态图片、手动顶面框和显式颜色编号。
+    debug_mode: detect        # detect / geometry_only
+    input_image: ""           # 非空时只处理一张图
+    manual_roi: []            # geometry_only：原图顶面框
+    manual_color_id: 0        # geometry_only 要求显式填写 1～6
+    # ROS OpenCV 桌面预览开关；true 需要 DISPLAY/WAYLAND_DISPLAY，不控制网页预览。
+    show_preview: false
+    # ROS 调试输出目录；空字符串不落盘，相机模式非空时追加 results.jsonl。
+    output_dir: ""
+    # ROS 相机每处理 N 帧保存一组图片；0 不保存相机图片，仍可记 JSONL，静态图不受此限制。
+    save_every_n_frames: 0
+
+    # 主相机稳定设备路径；正式执行端要求与 ring.yaml 的设备及宽高一致，避免同时占用设备。
+    camera_device: /dev/v4l/by-id/usb-HJ_USB_2.0_Camera_HJ_USB_2.0_Camera_SN0001-video-index0
+    # 请求采集宽度，单位 px，正整数；实际以设备协商结果为准。
+    camera_width: 1280
+    # 请求采集高度，单位 px，正整数；输出中心坐标使用实际原图尺寸。
+    camera_height: 720
+    # 请求采集帧率，单位帧/s；采集线程持续读帧并只保留最新帧，不保证识别达到此速度。
+    camera_fps: 30.0
+    # 请求 V4L2 缓冲数量，正整数；是否接受由驱动决定，不能仅据此推算总延迟。
+    camera_buffer_size: 4
+    # false 请求禁止自动曝光主动降帧，true 允许；是否支持由设备决定。
+    camera_dynamic_framerate: false
+    # 识别处理目标频率，单位 Hz；只处理新帧，实际速度受推理及几何耗时限制。
+    process_rate_hz: 30.0
+    # OpenCV CPU 算子线程上限，正整数；不控制 BPU 核数或相机帧率。
+    opencv_threads: 2
+    # 相机帧/结果最大年龄，单位 s，从软件完成读帧起算；静态图片不受此限制。
+    max_frame_age_s: 0.5
+    # ROS 相机入口等待首帧的上限，单位 s；超时报告 CAMERA_NO_FRAME。
+    camera_start_timeout_s: 10.0
+
+    # JHB 开关优先于 material_backend/material_model；手动 geometry_only 保持独立。
+    # .bin 使用含 float32 输出的版本；PC 可改为同包 ONNX。
+    # 几何复用 RingGeometry，参数独立于圆环工具。Lab 距离门限按模型包 README 为 23.172。
+    # true 使用 JHB 检测 + 几何定位 + Lab 判色，覆盖原后端/模型选择；与 test_combine 互斥。
+    use_jhb_model: false
+    # true 使用原六色 YOLO 判色、JHB 定位；仅共用 JHB 检测/几何，不使用其 Lab 判色门槛。
+    test_combine: false        # 原 YOLO 判色 + JHB 中心；与 use_jhb_model 互斥
+    # 组合模式中原 YOLO 颜色框与 JHB 框的匹配 IoU 下限，须在 (0,1)；匹配歧义时拒绝颜色。
+    combine.min_iou: 0.3       # 同帧框匹配，歧义时不采用颜色
+    # JHB material/cap_top 双类别模型；X5 用 float32 输出 BIN，PC 可用同包 ONNX。
+    jhb.model_path: /root/去年开源/gc_material_model_v218_20261116/detector/material_cap_v218_384x640_713700d9dc72.bin
+    # JHB 六色 Lab 判色模型 JSON（gc_color_lab v1）；仅 use_jhb_model 使用。
+    jhb.color_path: /root/去年开源/gc_material_model_v218_20261116/color/color_lab_v3_rda_core_d6721d60cb26.json
+    # 检测工作图缩小倍数，正整数；先按原图宽高整除缩小，再 letterbox 到 640×384。
+    jhb.work_scale: 4
+    # JHB 检测解码置信度下限 [0,1]；之后还需通过顶面/整体各自分数门槛。
+    jhb.confidence_threshold: 0.25
+    # JHB 同类 NMS 的 IoU 门槛 [0,1]；降低会更积极抑制重叠框。
+    jhb.nms_threshold: 0.45
+    # 顶面 cap_top 的最低检测分数 [0,1]。
+    jhb.cap_min_score: 0.7
+    # 参与顶面配对的整体 material 最低检测分数 [0,1]。
+    jhb.material_min_score: 0.25
+    # 顶面框距图边的最小距离，单位为缩小后的工作图 px；小于此值判为截断。
+    jhb.border_px: 1.2
+    # 工作图顶面框短边/长边下限 [0,1]；不是几何拟合椭圆的轴比门槛。
+    jhb.min_axis_ratio: 0.8
+    # 顶面框与整体框交集 / 顶面框面积下限 [0,1]；每个整体框最多配一个顶面。
+    jhb.min_containment: 0.7
+    # JHB Lab 判色前，是否用物料框外的亮中性背景估计白平衡；参考不足时使用单位增益。
+    jhb.white_balance: true
+    # Lab 六色后验概率下限 [0,1]；低于此值返回未知颜色。
+    jhb.color_p_min: 0.9
+    # 所选颜色的平方马氏距离上限，须 > 0；超出判为分布外，与概率门槛同时生效。
+    jhb.color_d2_max: 23.172
+    # JHB 顶面几何方法：contour 轮廓椭圆拟合；hough 霍夫找圆，不自动互相回退。
+    # 复用 RingGeometry，但 contour 提取实心顶面的外边界；本组参数与 ring.yaml 独立。
+    jhb.geometry.method: contour
+    # 拟合椭圆短半轴/长半轴下限 (0,1]；仅 contour 生效，提高会拒绝更强的斜拍。
+    jhb.geometry.min_ellipse_axis_ratio: 0.65
+    # 轮廓对拟合椭圆的平均径向误差上限，单位原图 px；仅 contour 生效。
+    jhb.geometry.max_contour_fit_error_px: 2.0
+    # 轮廓面积/拟合椭圆面积下限 (0,1]，仅 contour 生效；排除碎片和局部弧。
+    jhb.geometry.min_contour_area_ratio: 0.6
+    # contour + gray 局部阈值邻域边长，单位原图 px，奇数且 >= 3。
+    jhb.geometry.contour_adaptive_block_size: 31
+    # contour + gray 阈值为局部均值减 C；非负灰度级，增大更严格保留暗线。
+    jhb.geometry.contour_adaptive_c: 5.0
+    # contour + gray 候选搜索图最长边，单位 px；0 不缩小，只缩小搜索而不缩小输出/边缘验证。
+    jhb.geometry.contour_max_side_px: 192
+    # gray：灰度模糊；binary_morphology：模糊后暗色反二值化并做形态学处理。
+    jhb.geometry.preprocess: gray
+    # 高斯核边长，单位 px，正奇数；两种预处理均生效。
+    jhb.geometry.blur_kernel: 5
+    # 高斯标准差，单位 px，非负；0 由 OpenCV 自动估计。
+    jhb.geometry.blur_sigma: 1.2
+    # 仅 binary_morphology：灰度 <= 此值为前景，整数 [0,255]。
+    jhb.geometry.binary_threshold: 100
+    # 仅 binary_morphology：椭圆结构元素边长，单位 px，正奇数。
+    jhb.geometry.morphology_kernel: 3
+    # 仅 binary_morphology：开运算次数，非负整数，0 关闭；先开后闭。
+    jhb.geometry.open_iterations: 0
+    # 仅 binary_morphology：闭运算次数，非负整数，0 关闭；gray 模式不执行。
+    jhb.geometry.close_iterations: 1
+    # 仅 hough：累加器分辨率比，须 > 0；增大降低累加器分辨率。
+    jhb.geometry.hough_dp: 1.0
+    # 仅 hough：候选最小圆心间距，单位 px，须 > 0。
+    jhb.geometry.hough_min_distance_px: 4.0
+    # 仅 hough：内部 Canny 高阈值，低阈值取一半；独立边缘验证另用 edge_*。
+    jhb.geometry.hough_param1: 100.0
+    # 仅 hough：圆心累加器门槛，须 > 0；降低可增加候选，也可能增加误检。
+    jhb.geometry.hough_param2: 25.0
+    # 两种方法共用的最小半径/原始顶面框短边；须 > 0 且严格小于最大比例。
+    jhb.geometry.min_radius_ratio: 0.35
+    # 最大半径/原始顶面框短边；椭圆名义半径取两条半轴的均值。
+    jhb.geometry.max_radius_ratio: 0.55
+    # 圆心到原始顶面框中心的最大距离/原框短边，须 > 0。
+    jhb.geometry.max_center_offset_ratio: 0.25
+    # 圆周支持检查的 Canny 低阈值，须 > 0 且小于高阈值；输入始终是模糊灰度图。
+    jhb.geometry.edge_low_threshold: 50.0
+    # 圆周支持检查的 Canny 高阈值；提高会只保留更强边缘。
+    jhb.geometry.edge_high_threshold: 100.0
+    # 圆周等角采样点数，整数且 >= angle_sectors；增大增加检查开销。
+    jhb.geometry.circumference_samples: 180
+    # 各采样角在半径 ± 此容差内搜索边缘，单位 px，非负整数。
+    jhb.geometry.radial_tolerance_px: 3
+    # 全圆周命中边缘的采样点比例下限 (0,1]；落到 ROI 外也算无支持。
+    jhb.geometry.min_edge_support: 0.55
+    # 将圆周划分的角段数，正整数且不超过 circumference_samples。
+    jhb.geometry.angle_sectors: 12
+    # 单个角段内命中边缘的比例下限 (0,1]；达到才算有效角段。
+    jhb.geometry.sector_support_threshold: 0.4
+    # 有效角段最少数量，范围 1～angle_sectors；与全圆支持比例同时满足。
+    jhb.geometry.min_supported_sectors: 8
+    # 同一圆组内任意两圆心最大距离/原始框短边，须 > 0；组中心按支持比例加权。
+    jhb.geometry.merge_distance_ratio: 0.04
+    # 同组半径差 <= 此值视为重复候选，单位 px；非负，重复边缘不增加独立圆数。
+    jhb.geometry.duplicate_radius_tolerance_px: 2.0
+    # 最优与次优圆组评分差 <= 此值则判歧义；非概率，增大更容易拒绝难分组。
+    jhb.geometry.group_ambiguity_margin: 0.04

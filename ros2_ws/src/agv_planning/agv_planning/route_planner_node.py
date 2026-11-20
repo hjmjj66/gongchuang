@@ -1,11 +1,13 @@
 """Plan routes and execute them from fixed-frame XY and continuous yaw feedback."""
 
+from .link_recovery import communication_lost
+
 import math
 import time
 import uuid
 
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
+from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -17,6 +19,7 @@ from agv_interfaces.msg import (
 from agv_interfaces.srv import PlanRoute
 
 from .motion import AnglePID, PositionPID, TRANSLATIONS, merge_steps
+from .motion_config import MOTION_PARAMETERS, save_motion_parameters, validate_motion_parameters
 from .odometry import body_to_fixed, projection
 from .planner import EDGES, HEADINGS, Opcode, Topology, check_node, normalize_heading, parking_step
 from .executor_contract import ExecutorContract
@@ -86,26 +89,14 @@ class RoutePlannerNode(Node):
         self._topology = Topology(default_length, lengths)
         self._require_snapshot = self._param('require_map_snapshot', True)
 
-        self._translation_kp = float(self._param('translation_pid_kp', 2.0))
-        self._translation_ki = float(self._param('translation_pid_ki', 0.0))
-        self._translation_kd = float(self._param('translation_pid_kd', 0.1))
-        self._vx_max = float(self._param('translation_max_vx_mps', 0.7))
-        self._vy_max = float(self._param('translation_max_vy_mps', 0.4))
-        self._translation_tolerance_mm = float(self._param('translation_arrival_tolerance_mm', 3.0))
-        self._angle_kp = float(self._param('angle_pid_kp', 2.0))
-        self._angle_ki = float(self._param('angle_pid_ki', 0.0))
-        self._angle_kd = float(self._param('angle_pid_kd', 0.1))
-        self._w_max = float(self._param('angle_max_speed_deg_s', 120.0))
-        self._turn_tolerance_deg = float(self._param('turn_arrival_tolerance_deg', 0.2))
+        self._motion_config_path = self._param('debug_motion_config_path', '')
+        for name, (attribute, default) in MOTION_PARAMETERS.items():
+            setattr(self, attribute, float(self._param(name, default)))
         self._odom_timeout = float(self._param('odometry_timeout_s', 0.5))
         self._motion_progress_timeout = float(self._param('motion_progress_timeout_s', 2.0))
         self._control_rate = float(self._param('control_rate_hz', 50.0))
         self._validate_motion_config()
-        self._angle_pid = AnglePID(self._angle_kp, self._angle_ki, self._angle_kd,
-                                   self._w_max, self._turn_tolerance_deg)
-        self._position_pid = PositionPID(self._translation_kp, self._translation_ki,
-                                         self._translation_kd, (self._vx_max, self._vy_max),
-                                         self._translation_tolerance_mm / 1000.0)
+        self._reset_motion_pids()
 
         reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
                               durability=DurabilityPolicy.VOLATILE)
@@ -148,7 +139,9 @@ class RoutePlannerNode(Node):
             self._progress_pub = self.create_publisher(
                 RouteExecutionProgress,
                 self._param('debug_progress_topic', '/route/progress'), reliable)
-            self._progress_timer = self.create_timer(0.1, self._publish_progress)
+            self._progress_timer = self.create_timer(0.05, self._publish_progress)
+        if self._motion_config_path:
+            self.add_on_set_parameters_callback(self._set_motion_parameters)
         self._timer = self.create_timer(1.0 / self._control_rate, self._tick)
         self.get_logger().info(
             f'Ready: start_area={area} (node {self._home_node}, facing {self._initial_heading}); '
@@ -156,7 +149,38 @@ class RoutePlannerNode(Node):
         )
 
     def _param(self, name, default):
-        return self.declare_parameter(name, default, ParameterDescriptor(read_only=True)).value
+        editable = bool(getattr(self, '_motion_config_path', '')) and name in MOTION_PARAMETERS
+        return self.declare_parameter(name, default, ParameterDescriptor(read_only=not editable)).value
+
+    def _reset_motion_pids(self):
+        self._angle_pid = AnglePID(self._angle_kp, self._angle_ki, self._angle_kd,
+                                   self._w_max, self._turn_tolerance_deg)
+        self._position_pid = PositionPID(self._translation_kp, self._translation_ki,
+                                         self._translation_kd, (self._vx_max, self._vy_max),
+                                         self._translation_tolerance_mm / 1000.0)
+
+    def _motion_values(self):
+        return {name: getattr(self, attribute) for name, (attribute, _) in MOTION_PARAMETERS.items()}
+
+    def _set_motion_parameters(self, parameters):
+        if self._active:
+            return SetParametersResult(successful=False, reason='导航执行中，请先停止再保存参数')
+        values = self._motion_values()
+        try:
+            for parameter in parameters:
+                if parameter.name not in MOTION_PARAMETERS:
+                    raise ValueError('仅支持修改导航PID、限速和到达容差')
+                values[parameter.name] = parameter.value
+            validate_motion_parameters(values, min(self._topology.lengths.values()))
+            # Humble has no post-set callback. This is the only on-set callback;
+            # save before changing the controllers so write failures leave them intact.
+            save_motion_parameters(self._motion_config_path, values)
+        except (ValueError, OSError) as exc:
+            return SetParametersResult(successful=False, reason=str(exc))
+        for name, (attribute, _) in MOTION_PARAMETERS.items():
+            setattr(self, attribute, float(values[name]))
+        self._reset_motion_pids()
+        return SetParametersResult(successful=True)
 
     def _configured_heading(self, name):
         value = self._param(name, 'UNSET')
@@ -170,18 +194,7 @@ class RoutePlannerNode(Node):
         timer_period_ns = 1e9 / self._control_rate
         if not math.isfinite(timer_period_ns) or not 1 <= timer_period_ns < 2**63:
             raise ValueError('control rate must produce a representable timer period of at least 1 ns')
-        for name, gains in (('angle', (self._angle_kp, self._angle_ki, self._angle_kd)),
-                            ('translation', (self._translation_kp, self._translation_ki,
-                                             self._translation_kd))):
-            if not all(math.isfinite(value) and value >= 0 for value in gains) or gains[0] <= 0:
-                raise ValueError(f'{name} PID gains must be finite and nonnegative; Kp must be positive')
-        if (not math.isfinite(self._translation_tolerance_mm)
-                or not math.isfinite(self._turn_tolerance_deg)
-                or self._translation_tolerance_mm < 0 or self._turn_tolerance_deg < 0):
-            raise ValueError('arrival tolerances must be finite and nonnegative')
-        if (self._translation_tolerance_mm >= min(self._topology.lengths.values())
-                or self._turn_tolerance_deg >= 90.0):
-            raise ValueError('arrival tolerances must be smaller than one edge or one quarter turn')
+        validate_motion_parameters(self._motion_values(), min(self._topology.lengths.values()))
 
     def _on_map(self, message):
         if message.run_id != self._contract.run_id:
@@ -224,10 +237,12 @@ class RoutePlannerNode(Node):
             return
         binding = (message.odom_session_id, message.motion_epoch)
         changed = self._board_binding is not None and binding != self._board_binding
+        self._board = message
         self._board_binding = binding
         self._board_received = time.monotonic()-age
         self._board_ready = bool(message.motion_allowed and message.origin_initialized)
-        if changed or (not self._board_ready and (self._active or self._binding is not None)):
+        if changed or (not self._board_ready and not communication_lost(message)
+                       and (self._active or self._binding is not None)):
             self._invalidate_context('C-board permission/origin changed; reinitialize map pose')
 
     def _on_odometry(self, message):
@@ -421,8 +436,23 @@ class RoutePlannerNode(Node):
         if not self._active:
             return
         if not self._feedback_ready():
+            if (communication_lost(getattr(self, '_board', None)) or
+                    (getattr(self, '_link_paused', False) and self._board_ready
+                     and self._binding == self._board_binding)):
+                self._link_paused = True
+                self._publish_control(0., 0., 0., 'EXECUTING', 'Waiting for C-board reconnection')
+                self._angle_control_time = None
+                self._angle_progress_error = None
+                self._position_progress_error = [None, None]
+                self._position_progress_time = [time.monotonic(), time.monotonic()]
+                self._angle_progress_time = time.monotonic()
+                return
             self._invalidate_context('C-board feedback/permission timed out')
             return
+        if getattr(self, '_link_paused', False):
+            self._angle_pid.reset()
+            self._position_pid.reset()
+            self._link_paused = False
         segment = self._segments[self._segment_index]
         if self._segment_baseline is None:
             self._segment_from_node = self._current_node
@@ -450,7 +480,7 @@ class RoutePlannerNode(Node):
             return
         angle_done = abs(error) <= self._turn_tolerance_deg
         if self._check_angle_progress(abs(error)):
-            self._abort('yaw error made no progress during segment')
+            self._complete_segment('角度PID无进展超时，停止纠偏继续下一段；角度未确认达标')
             return
         now = time.monotonic()
         dt = (1.0 / self._control_rate if self._angle_control_time is None
@@ -460,7 +490,7 @@ class RoutePlannerNode(Node):
         if segment.opcode in TRANSLATIONS:
             velocities, errors, done = self._translation_motion(dt)
             if self._check_position_progress(errors):
-                self._abort('XY position error made no progress during segment')
+                self._complete_segment('位置PID无进展超时，停止纠偏继续下一段；位置未确认达标')
                 return
             velocities = body_to_fixed(*velocities, math.radians(yaw_base - self._yaw_deg))
             # Heading correction rotates XY, so enforce the limits again in the current body frame.
@@ -472,18 +502,23 @@ class RoutePlannerNode(Node):
             self._publish_control(0.0, 0.0, omega)
             done = angle_done
         if done:
-            self._publish_zero()
-            self._current_node = segment.end_node
-            self._current_heading = segment.target_heading
-            self._segment_index += 1
-            if self._segment_index >= len(self._segments):
-                self._active = False
-                self._current_node = self._execution_goal
-                self._publish_status(self._request_id, 'COMPLETED',
-                                     self._segment_index - 1, '')
-            else:
-                self._segment_baseline = None
-                self._publish_status(self._request_id, 'EXECUTING', self._segment_index, '')
+            self._complete_segment('')
+
+    def _complete_segment(self, reason):
+        segment = self._segments[self._segment_index]
+        self._publish_zero()
+        if reason:
+            self.get_logger().warning(reason)
+        self._current_node = segment.end_node
+        self._current_heading = segment.target_heading
+        self._segment_index += 1
+        if self._segment_index >= len(self._segments):
+            self._active = False
+            self._current_node = self._execution_goal
+            self._publish_status(self._request_id, 'COMPLETED', self._segment_index - 1, reason)
+        else:
+            self._segment_baseline = None
+            self._publish_status(self._request_id, 'EXECUTING', self._segment_index, reason)
 
     def _translation_motion(self, dt):
         yaw_base = self._segment_baseline[2]
@@ -602,6 +637,15 @@ class RoutePlannerNode(Node):
                 # A new segment has not taken its first odometry baseline yet.
                 msg.from_node = self._current_node
                 msg.start_heading = self._current_heading
+        msg.target_valid = (self._segment_baseline is not None
+                            and self._target_position is not None and self._target_yaw_deg is not None)
+        if msg.target_valid:
+            msg.target_x_m, msg.target_y_m = self._target_position
+            msg.target_yaw_deg = self._target_yaw_deg
+            msg.error_yaw_deg = self._target_yaw_deg - msg.yaw_deg
+            msg.error_x_m, msg.error_y_m = body_to_fixed(
+                self._target_position[0] - msg.x_m, self._target_position[1] - msg.y_m,
+                -math.radians(msg.baseline_yaw_deg))
         self._progress_pub.publish(msg)
 
     def _runtime(self):

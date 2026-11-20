@@ -2,11 +2,13 @@
 <package format="3">
   <name>agv_perception</name>
   <version>0.1.0</version>
-  <description>USB camera QR scanning and numbered ring geometry tools.</description>
+  <description>USB camera QR scanning, numbered ring and material recognition tools.</description>
   <maintainer email="team@example.com">AGV Team</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>agv_interfaces</exec_depend>
+  <exec_depend>agv_planning</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>

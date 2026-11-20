@@ -3,7 +3,12 @@ const $ = id => document.getElementById(id);
 const uuid = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
 const client = uuid();
 const anchors = {1:[821,141],2:[821,482],3:[821,800],4:[500,141],5:[500,482],6:[500,800],7:[180,141],8:[180,482],9:[180,800]};
-const stateNames = {IDLE:'待命',SCREEN_SETUP:'等待屏幕配置',READY:'已就绪',INITIALIZING:'初始化中',NAVIGATING:'导航中',WAITING:'工作等待',STOPPING:'停止中',STOPPED:'已停止',FINISHED:'已完成',FAULT:'故障'};
+const stateNames = {IDLE:'待命',SCREEN_SETUP:'等待屏幕配置',READY:'已就绪',INITIALIZING:'初始化中',NAVIGATING:'导航中',WAITING:'工作等待',SCANNING:'真实扫码中',WORKING:'纠偏对准与返回P0',STOPPING:'停止中',STOPPED:'已停止',FINISHED:'已完成',FAULT:'故障'};
+const motionFields = ['translation_pid_kp','translation_pid_ki','translation_pid_kd',
+  'translation_max_vx_mps','translation_max_vy_mps','translation_arrival_tolerance_mm',
+  'angle_pid_kp','angle_pid_ki','angle_pid_kd','angle_max_speed_deg_s','turn_arrival_tolerance_deg'];
+let motionDirty = false, pendingAction = '', lastRecordFiles = '';
+let workAlignment = false, realQr = false;
 let mode = 'free', state = null, connected = false, pending = null, lastEvents = '', lastStateAt = 0;
 let roads = {}, blockedEdges = new Set(), roadControls = [], settingsLocked = false, receivedState = false;
 const edgeKey = ([a,b]) => [Math.min(a,b),Math.max(a,b)].join('-');
@@ -73,7 +78,9 @@ function selections() {
   }
   $('align-row').hidden = competition;
   $('exit-start-row').hidden = competition;
-  $('mode-hint').textContent = (mode === 'screen' ? '网页开始 → 屏幕选择禁行路径并按 OK → 选择起终点并按 OK → 静止至少2秒。停止为急停；停止或完成后须复位再开始。' : '') + (competition ? '斜移出区 → 2 → 4 → 6 → 8 → 4 → 6 → 8 → 终点角点 → 斜移入区。两轴同时运动，距离读取比赛配置；工作区停好后等待3秒，跳过扫码与抓放。' : '按所选起点、当前朝向及终点导航；可选从启停区内先斜移到角点，再走完整路线。未开启工作对齐时保持车头朝向。');
+  $('work-alignment-row').hidden = !competition;
+  $('real-qr-row').hidden = mode !== 'screen';
+  $('mode-hint').textContent = (mode === 'screen' ? '网页开始 → 屏幕选择禁行路径并按 OK → 选择起终点并按 OK → 按大 START 按钮 → 静止至少2秒。停止为急停；停止或完成后须复位再开始。' : '') + (competition ? '斜移出区 → 2 → 4 → 6 → 8 → 4 → 6 → 8 → 终点角点 → 斜移入区。两轴同时运动，距离读取比赛配置；工作区停好后等待3秒；显示屏模式可开启真实扫码，抓放仍跳过。' : '按所选起点、当前朝向及终点导航；可选从启停区内先斜移到角点，再走完整路线。未开启工作对齐时保持车头朝向。');
   $('screen-status').hidden = mode !== 'screen';
   $('clear-blocked').hidden = mode === 'screen';
   $('road-hint').textContent = mode === 'screen' ? '起终点、朝向和禁行路段只读，均由显示屏本轮配置决定。网页保留地图、轨迹、状态及运动参数显示。' : '地图路段编号1～12与比赛一致，区别于底图节点编号1～9。可多选，再次点击取消；红色路段双向禁行。运行时锁定，停止后可修改。';
@@ -85,13 +92,13 @@ function updateSettings() {
   if (![2,4,6,8].includes(Number($('goal').value))) $('align').checked = false;
   if (![1,3].includes(Number($('start').value))) $('exit-start').checked = false;
   updateControls();
-  if (mode !== 'screen' && (!state || !['INITIALIZING','NAVIGATING','WAITING','STOPPING'].includes(state.state))) drawMarkers(Number($('start').value), Number($('goal').value));
+  if (mode !== 'screen' && (!state || !['INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','STOPPING'].includes(state.state))) drawMarkers(Number($('start').value), Number($('goal').value));
 }
 
 function updateControls() {
-  const busy = state && ['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','STOPPING'].includes(state.state);
-  const other = state?.owner && state.owner !== client && ['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','READY'].includes(state.state);
-  const locked = Boolean(busy || other || pending);
+  const busy = state && ['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','STOPPING'].includes(state.state);
+  const other = state?.owner && state.owner !== client && ['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','READY'].includes(state.state);
+  const locked = Boolean(busy || other || pending || state?.motion_save_pending);
   settingsLocked = locked || mode === 'screen';
   drawRoadChoices();
   for (const el of document.querySelectorAll('[data-mode],#start,#goal')) el.disabled = locked;
@@ -99,15 +106,28 @@ function updateControls() {
   $('heading').disabled = locked || mode !== 'free';
   $('align').disabled = locked || ![2,4,6,8].includes(Number($('goal').value));
   $('exit-start').disabled = locked || mode !== 'free' || ![1,3].includes(Number($('start').value));
+  $('real-qr').disabled = locked;
+  $('real-qr').setAttribute('aria-pressed',String(realQr));
+  $('real-qr').textContent = `真实扫码：${realQr ? '开启' : '关闭'}`;
+  $('real-qr').classList.toggle('primary',realQr);
+  $('work-alignment').disabled = locked;
+  $('work-alignment').setAttribute('aria-pressed',String(workAlignment));
+  $('work-alignment').textContent = `纠偏与2号环对准：${workAlignment ? '开启' : '关闭'}`;
+  $('work-alignment').classList.toggle('primary',workAlignment);
   $('start-button').disabled = !connected || locked || Boolean(state?.unresolved) || (mode === 'screen' && Boolean(state?.screen_needs_reset));
   $('reset-button').disabled = !connected || Boolean(other || pending || state?.unresolved) || Boolean(busy && !(mode === 'screen' && state.state === 'SCREEN_SETUP'));
-  $('stop-button').disabled = !connected || !state || !['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','READY'].includes(state.state);
+  $('stop-button').disabled = !connected || !state || !['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','READY'].includes(state.state);
+  const motionLocked = locked || !connected || !state?.config?.motion_tuning || Boolean(state?.unresolved);
+  for (const name of motionFields) $(`motion-${name}`).disabled = motionLocked;
+  $('motion-save').disabled = motionLocked;
+  $('motion-reset').disabled = motionLocked;
+  $('recording-enabled').disabled = motionLocked;
   if (other) $('operation-message').textContent = '其他页面持有控制权，本页只读；仍可停止。';
 }
 
 function settings() {
-  if (mode === 'screen') return {mode};
-  return {mode, start:Number($('start').value), goal:Number($('goal').value), heading:$('heading').value, align:mode === 'free' && $('align').checked, exit_start:mode === 'free' && $('exit-start').checked, blocked_edges:Object.values(roads).filter(edge => blockedEdges.has(edgeKey(edge)))};
+  if (mode === 'screen') return {mode, work_alignment:workAlignment, real_qr:realQr};
+  return {mode, work_alignment:mode !== 'free' && workAlignment, start:Number($('start').value), goal:Number($('goal').value), heading:$('heading').value, align:mode === 'free' && $('align').checked, exit_start:mode === 'free' && $('exit-start').checked, blocked_edges:Object.values(roads).filter(edge => blockedEdges.has(edgeKey(edge)))};
 }
 
 async function post(path, payload) {
@@ -117,16 +137,17 @@ async function post(path, payload) {
   return result;
 }
 
-async function command(action) {
+async function command(action, payload = settings()) {
   const operation_id = uuid();
   pending = operation_id;
+  pendingAction = action;
   $('operation-message').textContent = '正在提交…';
   updateControls();
   try {
-    await post('/api/command', {action, settings:settings(), operation_id});
+    await post('/api/command', {action, settings:payload, operation_id});
   } catch (error) {
     // Preserve the same ID if the HTTP response was lost; the server deduplicates it.
-    try { await post('/api/command', {action, settings:settings(), operation_id}); }
+    try { await post('/api/command', {action, settings:payload, operation_id}); }
     catch (retryError) {
       $('operation-message').textContent = `请求状态未知：${retryError.message}。请查看当前状态，勿重复启动。`;
       pending = null;
@@ -149,7 +170,7 @@ function health(id, label, okay) {
 
 function render(s) {
   state = s;
-  const screenActive = s.settings?.mode === 'screen' && (!receivedState || ['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','STOPPING'].includes(s.state));
+  const screenActive = s.settings?.mode === 'screen' && (!receivedState || ['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','STOPPING'].includes(s.state));
   if (screenActive && mode !== 'screen') {
     mode = 'screen';
     document.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('selected',b.dataset.mode === mode));
@@ -163,7 +184,11 @@ function render(s) {
     $('heading').value = s.settings.heading || '';
   }
   if (s.roads && !roadControls.length) buildRoadChoices(s.roads);
-  if (s.settings && ((mode === 'screen' && s.settings.mode === 'screen') || !receivedState || ['INITIALIZING','NAVIGATING','WAITING','STOPPING'].includes(s.state) || (s.state === 'READY' && s.owner !== client))) {
+  if (s.settings && (!receivedState || ['SCREEN_SETUP','INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','STOPPING'].includes(s.state) || (s.state === 'READY' && s.owner !== client))) {
+    workAlignment = Boolean(s.settings.work_alignment);
+    realQr = Boolean(s.settings.real_qr);
+  }
+  if (s.settings && ((mode === 'screen' && s.settings.mode === 'screen') || !receivedState || ['INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','STOPPING'].includes(s.state) || (s.state === 'READY' && s.owner !== client))) {
     blockedEdges = new Set((s.settings.blocked_edges || []).map(edgeKey));
   }
   receivedState = true;
@@ -172,13 +197,43 @@ function render(s) {
     const result = s.operations?.find(op => op.client === client && op.operation_id === pending);
     if (result && !result.pending) {
       $('operation-message').textContent = result.ok ? '操作已接受' : result.error;
+      if (pendingAction === 'save_motion') {
+        $('motion-message').textContent = result.ok ? '已保存到规划配置，下一次路线使用新参数。' : result.error;
+        if (result.ok) motionDirty = false;
+      }
       pending = null;
+    }
+  }
+  if (s.recording) {
+    const r = s.recording;
+    if (!pending) $('recording-enabled').checked = r.enabled;
+    $('recording-status').textContent = r.error || (r.active ? `正在记录 · ${r.samples} 条 · ${r.file}` :
+      r.enabled ? `记录已开启，下次开始自动记录${r.file ? '；上次记录 '+r.samples+' 条' : ''}` : '记录关闭');
+    $('recording-path').textContent = r.directory;
+    const fileKey = JSON.stringify(r.files.map(file => file.name));
+    if (fileKey !== lastRecordFiles) {
+      lastRecordFiles = fileKey;
+      $('recording-files').replaceChildren(...r.files.map(file => {
+        const link = document.createElement('a');
+        link.href = file.url; link.download = file.name; link.textContent = file.name;
+        return link;
+      }));
     }
   }
   $('state').textContent = stateNames[s.state] || s.state;
   $('state').className = `pill ${s.state === 'FAULT' ? 'offline' : ['READY','FINISHED'].includes(s.state) ? 'healthy' : ''}`;
+  $('qr-result').textContent = s.qr_result || (s.state === 'SCANNING' ? '正在等待连续5帧一致的任务码…' : '—');
   $('stage').textContent = s.reason || '请选择模式并摆好车辆';
   $('ready-reason').textContent = s.preflight_reason ? `就绪检查：${s.preflight_reason}` : '链路就绪';
+  $('work-diagnostic').hidden = !s.work || s.state !== 'WORKING';
+  if (s.work) {
+    const d = s.work.diagnostic || {};
+    $('work-diagnostic').textContent = [s.work.label,
+      d.slope != null ? `斜率 ${d.slope.toFixed(4)}` : '',
+      d.error_uv ? `环2误差 ${d.error_uv.map(n => n.toFixed(1)).join(' / ')} px` : '',
+      d.error_xy ? `距P0 ${(Math.hypot(...d.error_xy)*1000).toFixed(1)} mm` : '',
+      s.work.reason || ''].filter(Boolean).join('；');
+  }
   $('route-count').textContent = s.route_count ? `${Math.min(s.route_index+1,s.route_count)} / ${s.route_count}` : '—';
   $('countdown').textContent = (s.state === 'WAITING' || (s.state === 'INITIALIZING' && s.wait_s > 0)) ? `${s.wait_s.toFixed(1)} s` : '—';
   $('screen-status').textContent = s.screen ? `显示屏：${s.screen.error || (s.screen.accepting ? '接收本轮配置' : s.screen.connected ? '已连接，操作接收关闭' : '点击开始时连接')}；串口 ${s.screen.port}` : '等待显示屏状态';
@@ -199,8 +254,12 @@ function render(s) {
   $('board-reason').textContent = b.fault_reason || (fresh ? '运动许可不等同于物理停稳确认' : '等待新鲜C板反馈');
   if (s.config) {
     const c = s.config;
+    if (!motionDirty) fillMotion(c);
+    if (!c.motion_tuning) $('motion-message').textContent = '当前入口未启用导航调参，请更新并重启8080服务。';
+    else if ($('motion-message').textContent === '等待规划配置') $('motion-message').textContent = '可编辑；保存后生效。';
     $('config-values').textContent = `位置 PID ${c.translation_pid_kp} / ${c.translation_pid_ki} / ${c.translation_pid_kd}；vx 上限 ${c.translation_max_vx_mps} m/s，vy 上限 ${c.translation_max_vy_mps} m/s，各轴允许误差 ±${c.translation_arrival_tolerance_mm} mm；角度 PID ${c.angle_pid_kp} / ${c.angle_pid_ki} / ${c.angle_pid_kd}；角速度上限 ${c.angle_max_speed_deg_s}°/s，允许误差 ±${c.turn_arrival_tolerance_deg}°；出入区斜移每轴 ${c.parking_offset_mm} mm。`;
-    $('config-path').textContent = `${c.source}\n斜移参数：${c.mission_source}`;
+    $('config-path').textContent = `${c.source}\n斜移参数：${c.mission_source}\n纠偏参数：${c.work_source || '—'}`;
+    $('work-alignment-hint').textContent = `开启后，两次粗加工、首次暂存执行WORK → 纠偏 → 记录P0 → 对准2号环；粗加工再恢复WORK并做末次纠偏，之后INIT收纳 → 返回入站纠偏后记录的P0并停车，继续路线。视觉参数复用8086配置。`;
   }
   $('planned').setAttribute('points',s.plan?.display_points?.map(p => p.join(',')).join(' ') || s.plan?.nodes?.map(n => anchors[n].join(',')).join(' ') || '');
   $('trace').setAttribute('points',s.trace?.map(p => p.join(',')).join(' ') || '');
@@ -210,7 +269,7 @@ function render(s) {
     $('car').classList.toggle('invalid',!s.pose.valid);
     $('pose-label').textContent = s.pose.valid ? ('实测里程轨迹' + (s.pose.calibration_warning ? '；边长标定非矩形，像素显示近似' : '')) : '位置反馈失效 / 待重新同步';
   } else { $('car').setAttribute('visibility','hidden'); }
-  if (s.settings && ((mode === 'screen' && s.settings.mode === 'screen') || ['INITIALIZING','NAVIGATING','WAITING','STOPPING'].includes(s.state))) drawMarkers(s.settings.start,s.settings.goal);
+  if (s.settings && ((mode === 'screen' && s.settings.mode === 'screen') || ['INITIALIZING','NAVIGATING','WAITING','SCANNING','WORKING','STOPPING'].includes(s.state))) drawMarkers(s.settings.start,s.settings.goal);
   const key = JSON.stringify(s.events);
   if (key !== lastEvents) {
     lastEvents = key;
@@ -222,6 +281,36 @@ function render(s) {
   }
   updateControls();
 }
+
+function fillMotion(config) {
+  for (const name of motionFields) {
+    const input = $(`motion-${name}`);
+    if (input.value !== String(config[name])) input.value = config[name];
+  }
+}
+
+$('recording-enabled').addEventListener('change',() => {
+  if ($('recording-enabled').disabled) return;
+  command('set_recording',{enabled:$('recording-enabled').checked});
+});
+
+$('motion-form').addEventListener('input',() => {
+  motionDirty = true;
+  $('motion-message').textContent = '有未保存的修改；保存后用于下一次路线。';
+});
+$('motion-form').addEventListener('submit',event => {
+  event.preventDefault();
+  if ($('motion-save').disabled || !$('motion-form').reportValidity()) return;
+  const values = Object.fromEntries(motionFields.map(name => [name,Number($(`motion-${name}`).value)]));
+  $('motion-message').textContent = '正在保存并应用…';
+  command('save_motion',values);
+});
+$('motion-reset').addEventListener('click',() => {
+  if ($('motion-reset').disabled) return;
+  motionDirty = false;
+  fillMotion(state.config);
+  $('motion-message').textContent = '已恢复当前加载值。';
+});
 
 for (const button of document.querySelectorAll('[data-mode]')) button.addEventListener('click',() => {
   mode = button.dataset.mode;
@@ -236,6 +325,16 @@ for (const button of document.querySelectorAll('[data-mode]')) button.addEventLi
 });
 for (const id of ['start','goal','heading']) $(id).addEventListener('change',updateSettings);
 for (const action of ['start','stop','reset']) $(`${action}-button`).addEventListener('click',() => command(action));
+$('real-qr').addEventListener('click',() => {
+  if ($('real-qr').disabled) return;
+  realQr = !realQr;
+  updateControls();
+});
+$('work-alignment').addEventListener('click',() => {
+  if ($('work-alignment').disabled) return;
+  workAlignment = !workAlignment;
+  updateControls();
+});
 $('clear-blocked').addEventListener('click',() => {
   if (settingsLocked) return;
   blockedEdges.clear();

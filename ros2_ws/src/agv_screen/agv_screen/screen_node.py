@@ -12,7 +12,7 @@ import serial
 
 from agv_interfaces.msg import MissionState, MissionTaskInfo
 from agv_interfaces.srv import ConfigureMission
-from .protocol import END, ScreenMessageParser, task_commands
+from .protocol import END, ScreenMessageParser, count_commands, task_commands
 
 
 def main(args=None):
@@ -64,6 +64,7 @@ class ScreenNode(Node):
         self.next_send = 0.0
         self.state = None
         self.routes = None
+        self.zones = None
         self.submitted = False
         self.configure_future = None
         self.last_task = None
@@ -83,6 +84,7 @@ class ScreenNode(Node):
             return
         if message.state == 'WAIT_SETUP':
             self.routes = None
+            self.zones = None
             self.submitted = False
             self.configure_future = None
             self.last_task = None
@@ -95,9 +97,9 @@ class ScreenNode(Node):
         elif message.state == 'FAULT':
             self.get_logger().error('比赛未继续：' + message.reason)
         elif message.state == 'FINISHED':
-            # TODO(stage4): receive final successful-pick/place counts from mission,
-            # then enter result, wait 300 ms, and update t4/t5. No fake zero counts.
-            self.get_logger().info('比赛结束；第四阶段成功抓取/放置统计尚待视觉结果接入，保留任务码显示')
+            self.outgoing.extend(count_commands(message.pick_count, message.place_count))
+            self.get_logger().info(
+                f'比赛结束；按机构完成统计：抓取{message.pick_count}次，放置{message.place_count}次，已排队显示')
 
     def _on_task(self, message):
         if not message.valid or self.state is None or message.run_id != self.state.run_id:
@@ -110,7 +112,12 @@ class ScreenNode(Node):
         except ValueError as exc:
             self.get_logger().error(f'拒绝显示任务码：{exc}')
             return
+        # A late subscriber can receive FINISHED before the durable task snapshot.
+        if self.state.state == 'FINISHED':
+            self.outgoing.clear()
         self.outgoing.extend(commands)
+        if self.state.state == 'FINISHED':
+            self.outgoing.extend(count_commands(self.state.pick_count, self.state.place_count))
         self.last_task = identity
         self.get_logger().info('已排队显示本轮扫码结果：' + message.raw_code)
 
@@ -119,23 +126,30 @@ class ScreenNode(Node):
             return
         if kind == 'ROUTE':
             self.routes = values
+            self.zones = None
             self.get_logger().info('人工禁行路径：' + ('、'.join(map(str, values)) if values else '无'))
             self.get_logger().info('请继续在屏幕选择 start/stop，然后按 OK')
         elif self.routes is None:
             self.get_logger().warning('未收到本轮 ROUTE，请先在路径页按 OK')
             self.outgoing.append('page select_routine')
-        elif not self.client.service_is_ready():
-            self.get_logger().warning('mission 配置服务尚未就绪，请稍后在起终点页重新按 OK')
+        elif kind == 'CFG':
+            self.zones = values
+            self.get_logger().info(f'本轮启停区：{values[0]}→{values[1]}；请按大 START 按钮开始')
+        elif self.zones is None:
+            self.get_logger().warning('未收到本轮 CFG，请先在起终点页选择并按 OK')
             self.outgoing.append('page setup')
+        elif not self.client.service_is_ready():
+            self.get_logger().warning('mission 配置服务尚未就绪，请稍后重新按 START')
+            self.outgoing.append('page start')
         else:
-            start, stop = values
+            start, stop = self.zones
             request = ConfigureMission.Request(
                 expected_run_id=self.state.run_id, start_zone=start, stop_zone=stop,
                 forbidden_routes=list(self.routes))
             self.submitted = True
             self.configure_future = self.client.call_async(request)
             self.get_logger().info(
-                f'start{start}→节点{1 if start == 1 else 3}；stop{stop}→节点{1 if stop == 1 else 3}；'
+                f'start{start}→节点{start}；stop{stop}→节点{stop}；'
                 '已提交配置和启动请求，等待 mission 确认')
 
     def _tick(self):
@@ -155,7 +169,7 @@ class ScreenNode(Node):
                     self.get_logger().info(response.reason)
                 else:
                     self.submitted = False
-                    self.outgoing.append('page setup')
+                    self.outgoing.append('page start')
                     self.get_logger().error('配置未接受：' + response.reason)
         if self.outgoing and time.monotonic() >= self.next_send:
             command = self.outgoing.popleft()
@@ -163,7 +177,7 @@ class ScreenNode(Node):
             written = self.ser.write(payload)
             if written != len(payload):
                 raise OSError(f'屏幕指令未完整写入：{written}/{len(payload)}')
-            self.next_send = time.monotonic() + 0.1
+            self.next_send = time.monotonic() + (0.3 if command == 'page result' else 0.1)
             self.get_logger().debug('TX ' + command)
             if command == 'page select_routine':
                 self.get_logger().info('屏幕路径页已请求打开，请选择本轮禁行路径并按 OK；请核对旧高亮')

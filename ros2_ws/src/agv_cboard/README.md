@@ -1,6 +1,14 @@
 # C 板底盘通信节点
 
+固定动作采用[上位机通信协议v2.0（正文v0.8）](../../../上位机通信协议v2.0.md)：0=STOP/ABORT，1=HOME，2=INIT收纳，3=WORK工作位，4=原料夹取，5=粗加工夹取，6=粗加工/暂存第一层共用放置（由启动时记录的位姿决定），7=暂存第二层叠放；8已删除，9～15保留，在请求入口拒绝。`ArmCommand.srv`提供同名常量。帧ID、长度、CRC及JOG单位不变，ACK仍不代表执行完成。
+
+`0x82 STATUS`按v0.7解码：offset 8/12为int32 `fb_pulses/ud_pulses`（3200脉冲/圈，相对回零零点），offset 21为 `pos_flags`（bit0前后有效、bit1上下有效、bit2已标定），总长仍24字节。`/C/status`原样发布这些字段；无效位置不能用于机构闭环。机构yaw为单圈绝对角，底盘里程yaw仍连续。v0.6起固定动作不强制先HOME，ACK 5表示位置反馈无效。
+
+升级需重新构建agv_interfaces及所有依赖包，并重启桥接、视觉和网页进程；旧ROS消息和旧固件的同长STATUS不兼容，协议没有版本协商。
+
 `cboard_bridge_node` 订阅上位机最终速度 `/C/controll`，按 50 Hz 经 USB CDC 发给 C 板；发布会话二维里程 `/C/odometry`、板端原始观测 `/C/chassis_odometry` 和当前状态 `/C/status`。
+
+已接入机械臂协议 `0x02 ARM_CMD`、`0x03 ARM_JOG`：`/C/arm_command` 请求固定动作，`/C/arm_jog` 请求定时上下 RPM 点动，`/C/arm_execution` 发布请求 ID 和执行状态。与底盘共用同一串口；服务受理不等于动作完成，固定动作仍等待 ACK 和忙态回 idle。接口、超时及粗加工调试见[粗加工说明](../agv_perception/COARSE.md)。
 
 ## 构建与启动
 
@@ -14,7 +22,7 @@ source /root/工创/ros2_ws/install/setup.bash
 ros2 launch agv_cboard cboard.launch.py serial_port:=/dev/ttyACM0
 ```
 
-默认使用 YAML 中的 `/dev/rm_cboard`；设备链接规则见 `udev/99-rm-cboard.rules`。`config:=/绝对路径/cboard.yaml` 可覆盖配置；只有明确设置 `serial_port:=...` 才覆盖 YAML。参数在启动时读取。
+默认使用 YAML 中当前 X5 的 C 板固定路径 `/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_205A385B4D4B-if00`，不依赖 `ttyACM` 编号。更换 C 板时须更新路径；也可自行配置 `udev/99-rm-cboard.rules` 使用设备别名。`config:=/绝对路径/cboard.yaml` 可覆盖配置；只有明确设置 `serial_port:=...` 才覆盖 YAML。参数在启动时读取。
 
 ## 坐标与速度
 
@@ -67,7 +75,9 @@ yaw = yawb-yaw0
 
 `tx_sequence/tx_age_s/sent_vx_mps/sent_vy_mps/sent_wz_rad_s/sent_mode` 是最近成功写入串口的帧，不是下位机已经执行的保证。板端实际速度在两个里程话题中。`motion_allowed` 与 `command_fresh` 分离，均不等于物理停稳。
 
-自动任务遇到坐标或许可变化会终止；通信恢复不能自动恢复旧路线。调试重新选择当前位置、朝向后点击开始。正式比赛先在配置起点摆好车、切 PC，再初始化比赛上下文。
+C板仅串口掉线或STATUS/ODOM短时断流、板子未重启时，保留原点、坐标会话和运动许可代次。通信中断期间速度归零，上层保留路线和作业步骤并暂停计时；收到有效反馈后根据实际位置继续剩余动作，不重放缓存速度。覆盖正式比赛、路线调试、区域调试和比赛调试。板子重启、切换控制模式或硬件故障仍中止旧任务。
+
+机械臂未发送的固定指令在重连后发送；已发送但完成状态无法确认的固定动作，先等机构空闲，再发送高位工作指令 `cmd=3`，确认完成后重发原动作。原动作就是 `cmd=3` 时只执行一次。定时升降JOG只继续剩余时长；视觉伺服使用新的图像、位置反馈和流ID恢复。人工停止、页面失联和真实硬件故障仍终止任务。
 
 ## 静止漂移采样与三秒测试
 
@@ -110,3 +120,11 @@ PYTHONPATH=/root/工创/ros2_ws/src/agv_cboard python3 -m unittest discover -s /
 ```
 
 ROS2 与 workspace 已 source、使用独立 domain 后，`AGV_CBOARD_ROS_TEST=1` 可启用 `test_ros_pty.py`；仅打开新建 PTY，不连接实物。完整网页链路见 `tools/route_debug/tests/run_ros_pty.sh`。自动验证与实车验收分别记录。
+
+## 连续机构视觉速度
+
+新增 `/C/arm_servo`（`agv_interfaces/ArmServoCommand`）：header时间戳、stream_id、enabled、yaw_wz(rad/s)、fb_rpm(RPM)、odom_session_id、motion_epoch。升降始终0，沿用同一个CDC与0x03帧。发布频率50Hz，输入超过100ms或许可丢失主动发零并废弃该流；故障不续跑旧速度。每次恢复跟随或固定程序结束后使用新流ID和新图像。
+
+固定动作请求会关闭连续流，先发送零JOG，等待该发送之后的新鲜idle，再传输ARM_CMD；STOP/ABORT不等待idle。清空动作前速度缓存，防止动作后续跑。`ArmExecution.pending`也反映连续JOG/停止交接。`/C/arm_jog`的定时升降接口及完成条件保持兼容。关闭桥接时若仍有机构操作，串口关闭前主动写零JOG和ABORT；失联本身仍按既有下位机协议处理。
+
+原料机构点动后无须HOME是用户对当前下位机的明确确认，参见[原料说明](../agv_perception/RAW.md)，不代表所有固件具有这一能力。

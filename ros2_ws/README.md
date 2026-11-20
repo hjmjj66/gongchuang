@@ -1,11 +1,18 @@
 # ROS2 工作空间
 
+整套正式比赛入口已提供：`bash /root/工创/tools/start_competition.sh`，先构建到 `agv_bringup`。
+默认前台运行，按 Ctrl+C 统一退出；运行期间保持终端和 SSH 连接。雷达按 `mission.yaml` 的 `use_lidar: false` 显式跳过；
+触屏确认配置且所有必需执行端就绪后才运动，未标定参数仍拒绝比赛。
+详见[整套启动说明](src/agv_bringup/README.md)。
+
 专用调试工具保存在项目根目录 `tools/`，浏览器实车自由行走与比赛路线演练见 [工具说明](../tools/route_debug/README.md)。该入口独立启动调试控制节点，不能与正式mission同时运行。
 
+- 原料执行：`agv_perception` 公共工作宿主在第 4、10 阶段执行转盘圆心定位、机构视觉跟随与严格按序抓取三件，先收纳后返回参考，见[原料说明](src/agv_perception/RAW.md)；待实车参数标定和电控联调。
 - 比赛调度：`agv_mission`，已实现整批调度、开始/暂停/复位、阶段日志及统一速度转发，见 [比赛调度 README](src/agv_mission/README.md)。
-- 屏幕通信：`agv_screen`，人工禁行与雷达合并、屏幕选择起终点和一键启动、显示本轮扫码结果；[启动与操作说明](src/agv_screen/README.md)。`bash /root/工创/tools/start_screen_mission.sh` 启动调度和屏幕两个节点，硬件执行端仍分别启动；第四阶段成功次数待真实视觉结果接入。
+- 屏幕通信：`agv_screen`，人工禁行与雷达合并、屏幕选择起终点和一键启动、显示本轮扫码结果；[启动与操作说明](src/agv_screen/README.md)。`bash /root/工创/tools/start_screen_mission.sh` 启动调度和屏幕两个节点，硬件执行端仍分别启动；已适配启停区1/3及独立START；比赛结束显示按机构完成统计的抓取/放置次数。
 - 扫码节点：`agv_perception`，说明见下文。
 - 圆环工具：`agv_perception`，已实现编号框处理、ROI 霍夫圆精定位和图片调试，YOLO 模型与推理适配留空，见[使用说明](src/agv_perception/README.md)。
+- 物料工具：`agv_perception`，HSV 六色、顶面/整体 YOLO、中心来源、图片与网页调试，已接入两个真实 X5 模型；见[物料工具说明](../tools/material_debug/README.md)。区域业务和夹取仍待接入。
 - 路径规划节点：`agv_planning`，完整构建、配置与调试说明见 [路径规划 README](src/agv_planning/README.md)。
 - C板底盘通信：`agv_cboard`，USB CDC 速度下发、里程反馈、控制权及断流停车，见 [C板通信 README](src/agv_cboard/README.md)。实车接线、方向和停车效果仍需现场验收。
 - 路径规划消息与服务：`agv_interfaces`。mission只发目标，规划节点内部确定起点和当前朝向；`/route/path` 输出调试路线和行动链。规划节点读取 `/C/odometry`，通过 `/route/control` 返回速度及执行状态，mission校验后统一发布 `/C/controll`，供C板通信订阅。

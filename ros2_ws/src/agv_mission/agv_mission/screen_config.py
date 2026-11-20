@@ -8,10 +8,10 @@ ROUTE_EDGES = {
 
 
 def parse_screen_config(start_zone, stop_zone, forbidden_routes):
-    if start_zone not in (1, 2) or stop_zone not in (1, 2):
-        raise ValueError('start/stop 必须分别为 1 或 2')
+    if start_zone not in (1, 3) or stop_zone not in (1, 3):
+        raise ValueError('start/stop 必须分别为 1 或 3')
     if any(number not in ROUTE_EDGES for number in forbidden_routes):
         raise ValueError('禁行路径编号必须为 1～12')
     routes = tuple(sorted(set(forbidden_routes)))
     edges = tuple(sorted(tuple(sorted(ROUTE_EDGES[number])) for number in routes))
-    return (1 if start_zone == 1 else 3), (1 if stop_zone == 1 else 3), routes, edges
+    return start_zone, stop_zone, routes, edges

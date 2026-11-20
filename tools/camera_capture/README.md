@@ -28,7 +28,7 @@
 指定保存目录或设备：
 
 ```bash
-./tools/camera_capture/start.sh --output-dir /home/工创/wuliao/datasets/rings
+./tools/camera_capture/start.sh --output-dir /root/工创/wuliao_datasets
 ./tools/camera_capture/start.sh --device /dev/video0 --port 8083
 ```
 

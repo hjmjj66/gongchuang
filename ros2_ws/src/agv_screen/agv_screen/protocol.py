@@ -1,4 +1,4 @@
-"""Validated ROUTE/CFG and TJC text protocol, packaged without HMI dependencies."""
+"""Validated ROUTE/CFG/START and TJC text protocol, without HMI dependencies."""
 
 import re
 
@@ -20,12 +20,14 @@ class ScreenMessageParser:
                 return messages
             line = bytes(self.buffer[:end])
             del self.buffer[:end + 2]
-            start = max(line.rfind(b'CFG,'), line.rfind(b'ROUTE'))
+            start = max(line.rfind(b'CFG,'), line.rfind(b'ROUTE'), line.rfind(b'START'))
             if start < 0:
                 continue
             line = line[start:]
-            match = re.fullmatch(rb'CFG,([12]),([12])', line)
-            if match:
+            match = re.fullmatch(rb'CFG,([13]),([13])', line)
+            if line == b'START':
+                messages.append(('START', ()))
+            elif match:
                 messages.append(('CFG', (int(match[1]), int(match[2]))))
             elif re.fullmatch(rb'ROUTE(?:,(?:[1-9]|1[0-2]))*', line):
                 routes = tuple(int(value) for value in line.split(b',')[1:])
@@ -38,3 +40,7 @@ def task_commands(raw_code):
         raise ValueError('任务码必须为四组三位数字，用英文 + 连接')
     a, b, c, d = raw_code.split('+')
     return (f'show_number.t0.txt="{a}+{b}"', f'show_number.t1.txt="{c}+{d}"')
+
+
+def count_commands(pick_count, place_count):
+    return ('page result', f't4.txt="{pick_count}"', f't5.txt="{place_count}"')

@@ -10,8 +10,12 @@ from urllib.parse import urlsplit
 
 
 class WebServer:
-    def __init__(self, host, port, web_root, screenshot):
-        self.web_root, self.screenshot = Path(web_root), Path(screenshot)
+    def __init__(self, host, port, web_root, screenshot=None, preview=None, preview_frame=None, recordings=None):
+        self.web_root = Path(web_root)
+        self.screenshot = Path(screenshot) if screenshot is not None else None
+        self.preview = preview
+        self.preview_frame = preview_frame
+        self.recordings = Path(recordings) if recordings is not None else None
         self.commands = queue.Queue(maxsize=256)
         self.lock = threading.Lock()
         self.state = {'state': 'IDLE', 'reason': '正在初始化ROS连接'}
@@ -25,13 +29,15 @@ class WebServer:
             def log_message(self, *args):
                 pass
 
-            def respond(self, status, data, content_type='application/json; charset=utf-8'):
+            def respond(self, status, data, content_type='application/json; charset=utf-8', headers=None):
                 body = json.dumps(data, ensure_ascii=False, allow_nan=False).encode() if isinstance(data, dict) else data
                 self.send_response(status)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', str(len(body)))
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('X-Content-Type-Options', 'nosniff')
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -40,6 +46,15 @@ class WebServer:
                 try:
                     if route == '/api/state':
                         self.respond(200, outer.snapshot())
+                    elif route.startswith('/api/recordings/') and outer.recordings is not None:
+                        name = route.removeprefix('/api/recordings/')
+                        path = outer.recordings / name
+                        if (Path(name).name != name or not name.startswith('route_')
+                                or not name.endswith('.jsonl') or not path.is_file()):
+                            self.respond(404, {'error': '记录文件不存在'})
+                        else:
+                            self.respond(200, path.read_bytes(), 'application/x-ndjson; charset=utf-8',
+                                         headers={'Content-Disposition': f'attachment; filename="{name}"'})
                     elif route == '/api/events':
                         self.send_response(200)
                         self.send_header('Content-Type', 'text/event-stream')
@@ -55,7 +70,14 @@ class WebServer:
                         files = {'/': ('index.html', 'text/html; charset=utf-8'),
                                  '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
                                  '/style.css': ('style.css', 'text/css; charset=utf-8')}
-                        if route == '/map.png':
+                        if route == '/preview.jpg' and (outer.preview is not None or outer.preview_frame is not None):
+                            jpeg, metadata = outer.preview_frame() if outer.preview_frame else (outer.preview(), None)
+                            if jpeg is None:
+                                self.respond(503, {'error': '等待新画面'})
+                            else:
+                                headers = {'X-Preview-Observation': json.dumps(metadata, separators=(',', ':'))} if metadata else None
+                                self.respond(200, jpeg, 'image/jpeg', headers=headers)
+                        elif route == '/map.png' and outer.screenshot is not None:
                             self.respond(200, outer.screenshot.read_bytes(), 'image/png')
                         elif route in files:
                             name, mime = files[route]

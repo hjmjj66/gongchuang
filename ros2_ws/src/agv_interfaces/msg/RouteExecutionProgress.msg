@@ -26,3 +26,13 @@ float64 direction_y
 # Signed translation projection and cross-track offset; NOT cumulative distance.
 float64 signed_progress_mm
 float64 cross_track_mm
+
+# Actual controller targets and errors, in the same snapshot as feedback above.
+bool target_valid
+float64 target_x_m
+float64 target_y_m
+float64 target_yaw_deg
+# Position errors use the fixed axes at baseline_yaw_deg (PID input, metres).
+float64 error_x_m
+float64 error_y_m
+float64 error_yaw_deg

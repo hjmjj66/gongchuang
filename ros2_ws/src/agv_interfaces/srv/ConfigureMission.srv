@@ -1,4 +1,5 @@
-# One complete screen selection, followed by a request to start this round.
+# Submitted only after screen ROUTE, CFG and the separate START button.
+# start_zone / stop_zone are map nodes 1 or 3.
 string expected_run_id
 uint8 start_zone
 uint8 stop_zone

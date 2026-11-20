@@ -14,8 +14,12 @@ uint8 error_flags
 uint8 odom_status
 uint8 control_source
 
-float32 fb_mm
-float32 ud_mm
+# v0.7: signed pulses relative to the homing zero (3200 pulses/revolution).
+int32 fb_pulses
+int32 ud_pulses
+# bit0: FB valid; bit1: UD valid; bit2: zero calibration completed.
+uint8 pos_flags
+# Gantry single-turn absolute angle; chassis yaw remains continuous.
 float32 yaw_rad
 uint32 board_time_ms
 # Current health inhibition, automatically cleared when recovered.

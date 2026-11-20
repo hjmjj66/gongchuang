@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>全链路比赛调试</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><div><small>AGV · 独立实车调试工具</small><h1>全链路比赛调试</h1></div><span id="connection">连接中</span></header>
+<main>
+  <section class="visual card">
+    <nav><button data-view="map" aria-pressed="true">地图与轨迹</button><button data-view="camera" aria-pressed="false">当前相机</button></nav>
+    <div id="map-view" class="map">
+      <img src="/map.png" alt="比赛场地地图">
+      <svg viewBox="0 0 1035 916" aria-label="比赛路线、禁行路径和车辆里程位置">
+        <polyline id="planned"/><polyline id="trace"/><g id="roads"></g>
+        <g id="car" visibility="hidden"><circle r="24"/><path d="M0,-28 L16,18 L0,10 L-16,18 Z"/></g>
+      </svg>
+    </div>
+    <div id="camera-view" hidden>
+      <div class="camera-actions actions"><button id="camera-toggle">打开主相机预览</button><button id="qr-camera-toggle">打开扫码相机预览</button></div>
+      <p id="camera-state">相机已释放</p>
+      <p id="camera-error" role="status" hidden></p>
+      <img id="preview" alt="当前执行环节的相机及识别标注" hidden>
+    </div>
+    <p class="hint">蓝线为当前规划，绿线为实测里程轨迹；点击路段编号设置双向禁行。地图像素位置仅供显示。</p>
+  </section>
+  <aside>
+    <section class="card">
+      <h2>本轮配置</h2>
+      <nav><button data-mode="web" aria-pressed="true">网页配置</button><button data-mode="screen" aria-pressed="false">显示屏配置</button></nav>
+      <div class="fields"><label>起始启停区<select id="start"><option value="1">启停区1 · 节点1</option><option value="3">启停区3 · 节点3</option></select></label><label>最终停车区<select id="goal"><option value="1">启停区1 · 节点1</option><option value="3">启停区3 · 节点3</option></select></label></div>
+      <p id="mode-hint" class="hint"></p>
+      <p id="blocked">禁行路径：无</p><button id="clear">清空禁行</button>
+      <div class="switches"><label><input id="raw" type="checkbox" checked>原料区真实取放</label><label><input id="coarse" type="checkbox" checked>粗加工区真实取放</label><label><input id="storage" type="checkbox" checked>暂存区真实取放</label></div>
+      <p class="hint">关闭后仅将每次抓取、放置或码垛替换为停留1秒；其余动作真实执行。两轮共用开关，开始后锁定。</p>
+      <p class="notice">运行前人工摆车、准备物料和机构。起点1车头朝地图下方，起点3朝上。停止结束本轮；人工恢复后先复位。</p>
+      <div class="actions"><button id="start-button" class="primary">开始 · 一键跑完整场</button><button id="stop-button" class="danger">停止</button><button id="reset-button">复位</button></div>
+      <p id="operation" role="status"></p>
+    </section>
+    <section class="card">
+      <h2 id="status">待命</h2><p id="stage">等待连接</p><p id="reason" role="status"></p>
+      <p id="progress"></p><p id="hardware"></p><p id="task-code">任务码：等待真实扫码</p><p id="run-config"></p><p id="result"></p>
+    </section>
+    <section class="card"><h2>关键配置及来源</h2><p id="config" class="hint"></p><details><summary>配置来源</summary><pre id="sources"></pre></details></section>
+  </aside>
+  <section class="card logs"><div class="log-title"><h2>本轮执行日志</h2><button id="save">保存完整日志</button></div><ol id="logs"></ol></section>
+</main><script src="/app.js"></script>
+</body></html>

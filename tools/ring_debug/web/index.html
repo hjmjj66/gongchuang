@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>主相机 · 圆环识别调试</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><small>主相机 / 视觉调试</small><h1>圆环识别</h1></div><span id="state" class="badge">连接中</span></header>
+    <section class="metrics" aria-label="实时统计">
+      <div><span>相机采集</span><strong id="camera-fps">—</strong><small>FPS</small></div>
+      <div><span>识别处理</span><strong id="processing-fps">—</strong><small>FPS</small></div>
+      <div><span>网页显示</span><strong id="display-fps">—</strong><small>FPS</small></div>
+      <div><span>本帧处理</span><strong id="processing-ms">—</strong><small>ms</small></div>
+    </section>
+    <section class="viewer">
+      <div class="image-wrap"><img id="preview" alt="等待主摄像头画面" hidden><div id="empty">等待主摄像头画面</div></div>
+      <div class="legend"><span class="box">■ YOLO 框</span><span class="bbox">＋ 框中心 B</span><span class="circle">● 视觉圆心 C</span><span class="ring">○ 可信圆</span><span>灰框：处理 ROI</span></div>
+    </section>
+    <p id="message" role="status">正在连接识别服务…</p>
+    <p id="frame-info" class="muted">坐标以原图左上角为原点，x 向右、y 向下，单位为像素。</p>
+    <section class="observations" id="observations" aria-label="编号识别结果"></section>
+    <footer><p id="rule">每类仅保留最高置信度框，候选置信度须严格大于 0.75。</p><p>圆检测失败时保留框中心作为退化结果；视觉圆心显示“—”。画面与结果来自同一帧。帧率按近期实际数据统计。</p><p id="device"></p></footer>
+  </main>
+</body>
+</html>

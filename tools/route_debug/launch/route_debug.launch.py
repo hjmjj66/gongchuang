@@ -15,13 +15,14 @@ TOOL = Path(__file__).resolve().parents[1]
 PREFIX = '/tools/route_debug'
 
 
-def setup(context):
+def setup(context, *, controller_module='route_debug.node', pythonpaths=(), controller_arguments=()):
     get = lambda name: LaunchConfiguration(name).perform(context)
     planner = Node(package='agv_planning', executable='route_planner_node',
         name='route_planner_node', output='screen',
         parameters=[get('planner_config'), {'debug_allow_any_pose': True,
+                    'debug_motion_config_path': get('planner_config') if controller_module == 'route_debug.node' else '',
                     'debug_publish_progress': True,
-                    'work_heading.node_2': 'DOWN', 'work_heading.node_4': 'LEFT',
+                    'work_heading.node_2': 'RIGHT', 'work_heading.node_4': 'LEFT',
                     'work_heading.node_6': 'RIGHT', 'work_heading.node_8': 'DOWN',
                     'plan_service': PREFIX + '/plan', 'route_topic': PREFIX + '/path',
                     'control_topic': PREFIX + '/control', 'execution_status_topic': PREFIX + '/status',
@@ -36,10 +37,16 @@ def setup(context):
         board_params.append({'serial_port': get('serial_port')})
     board = Node(package='agv_cboard', executable='cboard_bridge_node',
                  name='cboard_bridge_node', parameters=board_params, output='screen')
-    env = {'PYTHONPATH': str(TOOL) + os.pathsep + os.environ.get('PYTHONPATH', '')}
-    controller_cmd = ['/usr/bin/python3', '-m', 'route_debug.node',
+    env = {'PYTHONPATH': os.pathsep.join((*map(str, pythonpaths), str(TOOL), str(ROOT / 'tools/coarse_debug'),
+                                        os.environ.get('PYTHONPATH', '')))}
+    controller_cmd = ['/usr/bin/python3', '-m', controller_module,
                       '--planner-config', get('planner_config'), '--debug-config', get('debug_config'),
-                      '--mission-config', get('mission_config')]
+                      '--mission-config', get('mission_config'), '--work-config', get('work_config'),
+                      '--qr-config', get('qr_config')]
+    for name in controller_arguments:
+        controller_cmd.extend(['--'+name.replace('_', '-'), get(name)])
+    if controller_module == 'route_debug.node':
+        controller_cmd.extend(['--data-dir', get('data_dir')])
     controller_cmd.extend(['--screen-config', get('screen_config')])
     if get('screen_port'):
         controller_cmd.extend(['--screen-port', get('screen_port')])
@@ -57,10 +64,12 @@ def setup(context):
 def generate_launch_description():
     defaults = dict(planner_config=str(ROOT / 'ros2_ws/src/agv_planning/config/planner.yaml'),
                     mission_config=str(ROOT / 'ros2_ws/src/agv_mission/config/mission.yaml'),
+                    qr_config=str(ROOT / 'ros2_ws/src/agv_perception/config/qr.yaml'),
                     cboard_config=str(ROOT / 'ros2_ws/src/agv_cboard/config/cboard.yaml'),
                     debug_config=str(TOOL / 'config/debug.yaml'),
+                    work_config=str(ROOT / 'tools/coarse_debug/config/debug.yaml'),
                     screen_config=str(ROOT / 'ros2_ws/src/agv_screen/config/screen.yaml'),
                     screen_port='',
-                    serial_port='', host='', port='')
+                    data_dir=str(TOOL / 'data'), serial_port='', host='', port='')
     return LaunchDescription([DeclareLaunchArgument(k, default_value=v) for k, v in defaults.items()] +
                              [OpaqueFunction(function=setup)])

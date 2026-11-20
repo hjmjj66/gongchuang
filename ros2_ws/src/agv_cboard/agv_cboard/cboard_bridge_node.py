@@ -11,12 +11,14 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_srvs.srv import Trigger
 
-from agv_interfaces.msg import CBoardOdometry, CBoardStatus, ControlCommand, OdometryFeedback
+from agv_interfaces.msg import ArmServoCommand, ArmExecution, CBoardOdometry, CBoardStatus, ControlCommand, OdometryFeedback
+from agv_interfaces.srv import ArmCommand, JogArm
 
 from .chassis_adapter import ChassisAdapter
 from .command_executor import CommandExecutor
 from .transport import SerialTransport
-from .protocol import CHASSIS_STRUCT
+from .protocol import CHASSIS_CMD, CHASSIS_STRUCT, STATUS, encode_arm, encode_jog
+from .arm_controller import ArmController
 
 
 class CBoardBridgeNode(Node):
@@ -42,6 +44,8 @@ class CBoardBridgeNode(Node):
         self._adapter = ChassisAdapter(
             self._command_timeout, self._status_timeout, self._odom_timeout,
             stop_on_slip=self._stop_on_slip)
+        self._arm = ArmController(float(self._param('arm_ack_timeout_s', 2.0)),
+                                  float(self._param('arm_action_timeout_s', 30.0)))
         self._tx_sequence = 0
         self._last_tx = None
         self._tx_values = (0., 0., 0., 0)
@@ -55,15 +59,21 @@ class CBoardBridgeNode(Node):
         self._chassis_odom_pub = self.create_publisher(
             CBoardOdometry, self._chassis_odom_topic, qos)
         self._status_pub = self.create_publisher(CBoardStatus, self._status_topic, qos)
+        self._arm_pub = self.create_publisher(ArmExecution, '/C/arm_execution', qos)
+        self._arm_service = self.create_service(ArmCommand, '/C/arm_command', self._arm_command)
+        self._jog_service = self.create_service(JogArm, '/C/arm_jog', self._arm_jog)
+        self._servo_sub = self.create_subscription(ArmServoCommand, '/C/arm_servo', self._arm_servo, qos)
         self._reset_srv = self.create_service(Trigger, '/C/reset_fault', self._reset_fault)
         self._status_timer = self.create_timer(0.05, self._publish_status)
         self._odometry_timer = self.create_timer(0.01, self._publish_odometry)
         self._chassis_odometry_timer = self.create_timer(0.01, self._publish_chassis_odometry)
         self._last_status_log = None
+        self._last_arm_log = None
         self._transport = SerialTransport(
             self._serial_port, self._send_rate,
             self._reconnect_interval, self._on_connected, self._on_disconnected,
-            self._on_frame, self._get_command, self._log_from_worker, self._on_sent)
+            self._on_frame, self._get_command, self._log_from_worker, self._on_sent,
+            self._get_arm_frames)
         self._transport.start()
         self.get_logger().info(
             f'C-board bridge ready: port={self._serial_port}, '
@@ -94,6 +104,7 @@ class CBoardBridgeNode(Node):
         with self._lock:
             was_connected = self._adapter.connected
             self._adapter.on_disconnected(now, reason)
+            self._arm.pause_link(now)
             self._pending_odometry = None
             self._pending_chassis_odometry = None
         if was_connected:
@@ -121,6 +132,9 @@ class CBoardBridgeNode(Node):
 
     def _on_sent(self, frame, now):
         with self._lock:
+            if frame[2] != CHASSIS_CMD:
+                self._arm.sent(frame, now)
+                return
             self._tx_sequence += 1
             self._last_tx = now
             self._tx_values = CHASSIS_STRUCT.unpack(frame[4:-2])
@@ -129,11 +143,65 @@ class CBoardBridgeNode(Node):
         with self._lock:
             return self._adapter.command_frame(time.monotonic())
 
+    def _get_arm_frames(self, now):
+        with self._lock:
+            a = self._adapter
+            reason = a.health_reason(now)
+            if reason in ('serial disconnected', 'STATUS missing or timed out', 'ODOM missing or timed out'):
+                self._arm.pause_link(now)
+            else:
+                self._arm.resume_link(now)
+            allowed = a.connected and a.status_fresh(now) and a.status.source == 2
+            return self._arm.frames(now, allowed, (a.odom_session_id, a.motion_epoch))
+
+    def _submit_arm(self, request, response, **operation):
+        with self._lock:
+            a, now = self._adapter, time.monotonic()
+            stop = operation.get('cmd') == 0
+            binding = (a.odom_session_id, a.motion_epoch)
+            recovering = (a.origin_initialized and a.health_reason(now) in (
+                'serial disconnected', 'STATUS missing or timed out', 'ODOM missing or timed out') and
+                binding == (request.odom_session_id, request.motion_epoch))
+            if not stop and not recovering and (not a.status_fresh(now) or a.status.source != 2):
+                response.reason = 'C board is not connected in PC mode'
+            elif not stop and not recovering and (not a.update(now) or binding !=
+                                (request.odom_session_id, request.motion_epoch)):
+                response.reason = 'stale arm coordinate/permission binding'
+            else:
+                try:
+                    if recovering:
+                        self._arm.pause_link(now)
+                    response.accepted, response.reason = self._arm.submit(
+                        request.command_id, binding, **operation)
+                except ValueError as error:
+                    response.reason = str(error)
+        return response
+
+    def _arm_command(self, request, response):
+        return self._submit_arm(request, response, cmd=int(request.cmd))
+
+    def _arm_jog(self, request, response):
+        return self._submit_arm(request, response, ud_rpm=request.ud_rpm, duration=request.duration_s)
+
+    def _arm_servo(self, message):
+        stamp = message.header.stamp.sec*1_000_000_000+message.header.stamp.nanosec
+        age = (self.get_clock().now().nanoseconds-stamp)/1e9
+        with self._lock:
+            a, now = self._adapter, time.monotonic()
+            binding = (a.odom_session_id, a.motion_epoch)
+            if (0 <= age <= self._arm.servo_timeout and a.update(now) and
+                    binding == (message.odom_session_id, message.motion_epoch)):
+                self._arm.servo(message.stream_id, binding, message.yaw_wz, message.fb_rpm,
+                                message.enabled, now-age, stamp)
+
     def _on_frame(self, msg_id, payload, now):
         with self._lock:
             now = time.monotonic()
             previous_odom = self._adapter.odom
             is_new_odom = self._adapter.on_frame(msg_id, payload, now)
+            self._arm.ack(msg_id, payload)
+            if msg_id == STATUS and self._adapter.status_received == now:
+                self._arm.status(self._adapter.status.arm, now)
             if self._adapter.odom is not previous_odom and self._adapter.odom is not None:
                 self._pending_chassis_odometry = (self._adapter.odom, now)
             if is_new_odom:
@@ -227,8 +295,9 @@ class CBoardBridgeNode(Node):
                 msg.arm_state = status.arm
                 msg.online_mask = status.online
                 msg.error_flags = status.errors
-                msg.fb_mm = status.fb_mm
-                msg.ud_mm = status.ud_mm
+                msg.fb_pulses = status.fb_pulses
+                msg.ud_pulses = status.ud_pulses
+                msg.pos_flags = status.pos_flags
                 msg.yaw_rad = status.yaw_rad
                 msg.control_source = status.source
                 msg.board_time_ms = status.t_ms
@@ -249,6 +318,17 @@ class CBoardBridgeNode(Node):
     def _publish_status(self):
         message = self._status_message()
         self._status_pub.publish(message)
+        with self._lock:
+            arm = ArmExecution(command_id=self._arm.command_id, state=self._arm.state,
+                               pending=self._arm.pending or self._arm.servo_busy,
+                               idle=message.status_valid and message.pc_control and self._arm.idle and not self._arm.servo_busy,
+                               reason=self._arm.reason)
+            arm.header.stamp = self.get_clock().now().to_msg()
+        self._arm_pub.publish(arm)
+        arm_log = (arm.command_id, arm.state, arm.reason)
+        if arm.command_id and arm_log != self._last_arm_log:
+            self._last_arm_log = arm_log
+            self.get_logger().info(f'ARM {arm.command_id} {arm.state} pending={arm.pending} {arm.reason}')
         if message.fault_reason != self._last_status_log:
             if message.fault_reason:
                 self.get_logger().warning(f'Motion inhibited: {message.fault_reason}')
@@ -266,7 +346,9 @@ class CBoardBridgeNode(Node):
 
     def destroy_node(self):
         if hasattr(self, '_transport'):
-            self._transport.stop()
+            with self._lock:
+                frames = (encode_jog(), encode_arm(0)) if self._arm.pending or self._arm.servo_busy else ()
+            self._transport.stop(frames)
         return super().destroy_node()
 
 

@@ -17,10 +17,11 @@ class Status:
     arm: int
     online: int
     errors: int
-    fb_mm: float
-    ud_mm: float
+    fb_pulses: int
+    ud_pulses: int
     yaw_rad: float
     source: int
+    pos_flags: int
 
 
 @dataclass(frozen=True)
@@ -67,8 +68,8 @@ class ChassisAdapter:
     def clear_command(self):
         self._command = self._command_received = None
 
-    def _inhibit(self, now):
-        if self._ready:
+    def _inhibit(self, now, communication=False):
+        if self._ready and not communication:
             self.motion_epoch += 1
         self._ready = False
         self._command_gate = now
@@ -83,9 +84,9 @@ class ChassisAdapter:
         self._origin_after = now
 
     def on_connected(self, now):
-        self._new_origin(now)
+        if self.status is None and self.odom is None:
+            self._new_origin(now)
         self.connected = True
-        self.status = self.odom = None
         self.status_received = self.odom_received = None
         self._last_command_time = float('-inf')
         self._last_source_timestamp_ns = None
@@ -95,7 +96,7 @@ class ChassisAdapter:
     def on_disconnected(self, now, reason='serial disconnected'):
         del reason
         self.connected = False
-        self._inhibit(now)
+        self._inhibit(now, communication=True)
         self.status_received = self.odom_received = None
 
     def status_fresh(self, now):
@@ -140,7 +141,8 @@ class ChassisAdapter:
         reason = self.health_reason(now)
         if reason:
             if self._ready:
-                self._inhibit(now)
+                self._inhibit(now, communication=reason in (
+                    'serial disconnected', 'STATUS missing or timed out', 'ODOM missing or timed out'))
             self.clear_command()
         elif not self._ready:
             self._ready = True

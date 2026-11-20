@@ -7,12 +7,12 @@ import unittest
 from agv_cboard.chassis_adapter import ChassisAdapter
 from agv_cboard.protocol import (
     CHASSIS_CMD, CHASSIS_STRUCT, ODOM, ODOM_STRUCT, STATUS, STATUS_STRUCT,
-    FrameParser, crc16, encode_chassis, encode_frame,
+    FrameParser, crc16, encode_chassis, encode_frame, unpack_status,
 )
 
 
 def status(t=1, source=2, chassis=1, online=15, errors=0):
-    return STATUS_STRUCT.pack(t, chassis, 0, online, errors, 0., 0., 0., source)
+    return STATUS_STRUCT.pack(t, chassis, 0, online, errors, 0, 0, 0., source, 7)
 
 
 def odom(t=1, x=0., y=0., yaw=0., flags=0x0D):
@@ -26,7 +26,7 @@ class ProtocolTests(unittest.TestCase):
     EXAMPLES = (
         'AA 55 01 10 CD CC 4C 3E 00 00 00 00 00 00 00 3F 01 00 00 00 7A 46',
         'AA 55 81 20 40 E2 01 00 00 00 80 3F 00 00 00 3F CD CC CC 3D CD CC 4C 3E 00 00 00 00 00 00 00 3F 01 00 00 00 17 BE',
-        'AA 55 82 18 40 E2 01 00 01 00 0F 00 00 00 C8 42 00 00 48 42 00 00 00 00 02 00 00 00 EC BD',
+        'AA 55 82 18 40 E2 01 00 01 00 0F 00 DA 0E 00 00 CA 12 00 00 00 00 00 00 02 07 00 00 D7 75',
         'AA 55 83 04 02 00 00 00 EF 90',
     )
 
@@ -50,6 +50,27 @@ class ProtocolTests(unittest.TestCase):
             for byte in frame:
                 result.extend(parser.feed(bytes((byte,)), 1.))
             self.assertEqual(result, expected)
+
+    def test_v07_status_example_decodes_pulses_and_flags(self):
+        frame = bytes.fromhex(self.EXAMPLES[2])
+        self.assertEqual(STATUS_STRUCT.size, 24)
+        self.assertEqual(unpack_status(frame[4:-2]),
+                         (123456, 1, 0, 15, 0, 3802, 4810, 0., 2, 7))
+
+    def test_status_signed_int32_offsets_reserved_and_appended_fields(self):
+        payload = bytearray(24)
+        struct.pack_into('<I', payload, 0, 42)
+        struct.pack_into('<ii', payload, 8, -2147483648, 2147483647)
+        struct.pack_into('<f', payload, 16, -.25)
+        payload[20:24] = bytes((2, 0x85, 0xAA, 0x55))
+        values = unpack_status(payload + b'future fields')
+        self.assertEqual(values[5:], (-2147483648, 2147483647, -.25, 2, 0x85))
+        self.assertIs(type(values[5]), int)
+        with self.assertRaises(ValueError):
+            unpack_status(payload[:23])
+        struct.pack_into('<f', payload, 16, float('nan'))
+        with self.assertRaises(ValueError):
+            unpack_status(payload)
 
     def test_noise_bad_crc_glued_and_unknown_frames(self):
         good = encode_frame(STATUS, status())
@@ -257,18 +278,33 @@ class AdapterTests(unittest.TestCase):
         epoch=self.a.motion_epoch
         self.ready(10.25,251)
         self.assertTrue(self.a.update(10.251))
-        self.assertNotEqual(self.a.motion_epoch,epoch)
+        self.assertEqual(self.a.motion_epoch,epoch)
         self.assertFalse(self.a.on_command(.1,0.,0.,10.252,source_age=.01))
         self.assertTrue(self.a.on_command(.1,0.,0.,10.253))
 
-    def test_reconnect_and_process_restart_new_session(self):
+    def test_reconnect_preserves_coordinates_but_process_restart_does_not(self):
         old=self.a.odom_session_id
+        epoch=self.a.motion_epoch
+        self.assertTrue(self.a.on_command(.1,0.,0.,10.015))
         self.a.on_disconnected(10.02)
         self.a.on_connected(10.03)
         self.ready(10.04,41,x=8.)
-        self.assertNotEqual(self.a.odom_session_id,old)
-        self.assertEqual(self.a.local_odom().x,0.)
+        self.assertEqual(self.a.odom_session_id,old)
+        self.assertEqual(self.a.motion_epoch,epoch)
+        self.assertEqual(self.a.local_odom().x,8.)
+        self.assertEqual(self.a.command_frame(10.041),ZERO)
+        self.assertTrue(self.a.on_command(.1,0.,0.,10.042,odom_session_id=old,motion_epoch=epoch))
+        self.assertNotEqual(self.a.command_frame(10.043),ZERO)
         self.assertNotEqual(ChassisAdapter().odom_session_id,self.a.odom_session_id)
+
+    def test_reconnect_with_board_reboot_still_replaces_origin(self):
+        self.ready(10.02, 1001, x=1.)
+        old = self.a.odom_session_id
+        self.a.on_disconnected(10.03)
+        self.a.on_connected(10.04)
+        self.ready(10.05, 2, x=4.)
+        self.assertNotEqual(self.a.odom_session_id, old)
+        self.assertEqual(self.a.local_odom().x, 0.)
 
     def test_restart_two_streams_once_then_recover(self):
         self.a.on_connected(10.005)

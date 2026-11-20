@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>主相机 · 物料识别调试</title>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body><main>
+  <header><div><small>主相机 / 视觉调试</small><h1>物料识别</h1></div><span id="state" class="badge">连接中</span></header>
+  <section class="model-switch" aria-label="识别模式">
+    <label for="model-select">识别模式</label>
+    <select id="model-select" disabled>
+      <option value="original">原有识别（按启动配置）</option>
+      <option value="jhb">JHB 模型 · Lab 六色</option>
+      <option value="test_combine">test_combine · 原 YOLO 颜色 + JHB 中心</option>
+    </select>
+    <span id="switch-status" role="status">正在读取当前模式…</span>
+  </section>
+  <p id="mode">等待识别配置</p><p id="model" class="muted"></p>
+  <section class="metrics" aria-label="实时统计">
+    <div><span>相机采集</span><strong id="camera-fps">—</strong><small>FPS</small></div>
+    <div><span>识别处理</span><strong id="processing-fps">—</strong><small>FPS</small></div>
+    <div><span>网页显示</span><strong id="display-fps">—</strong><small>FPS</small></div>
+    <div><span>本帧处理</span><strong id="processing-ms">—</strong><small>ms</small></div>
+  </section>
+  <section class="viewer">
+    <div class="image-wrap"><img id="preview" alt="物料识别画面" hidden><div id="empty">等待识别画面</div></div>
+    <div class="legend"><span class="bbox">＋ 框中心 B</span><span class="circle">● 几何圆心 C</span><span class="final">◇ 最终中心 F</span><span>灰框：顶面处理 ROI</span></div>
+  </section>
+  <p id="message" role="status">正在连接…</p><p id="frame-info" class="muted"></p>
+  <section id="observations" class="observations" aria-label="物料候选"></section>
+  <footer><p id="rule"></p><p>图像与坐标来自同一帧。框中心估计可用；颜色歧义和截断候选无效。</p><p id="device"></p></footer>
+</main></body></html>

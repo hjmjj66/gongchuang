@@ -1,7 +1,8 @@
 cboard_bridge_node:
   ros__parameters:
-    # 使用稳定设备路径；真实 VID/PID/序列号请在目标 X5 上确认。
-    serial_port: /dev/rm_cboard
+    # 当前 X5 的 C 板：STM32 CDC，序列号 205A385B4D4B。
+    # 固定 USB 身份路径，避免重插后 ttyACM 编号变化；更换 C 板时更新。
+    serial_port: /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_205A385B4D4B-if00
     # 协议要求 50 Hz；重发不会延长 ROS 输入的有效期。
     send_rate_hz: 50.0
     command_timeout_s: 0.05
@@ -12,6 +13,8 @@ cboard_bridge_node:
     # 这不是速度门限，C 板打滑角速度差门限须在板端固件修改。
     stop_on_slip: false
     reconnect_interval_s: 1.0
+    arm_ack_timeout_s: 2.0
+    arm_action_timeout_s: 30.0
     # 统一车体系 x前 / y左；位置坐标轴在每次进入PC时固定建立。
     control_topic: /C/controll
     odometry_topic: /C/odometry

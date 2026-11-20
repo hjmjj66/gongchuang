@@ -25,6 +25,50 @@ class IO:
         self.calls, self.commands, self.maps = [], [], []
         self.exclusive_ok = True
         self.screen_open = False
+        self.work_starts = []
+        self.work_done = self.work_cancelled = False
+        self.work_free = True
+        self.qr_started = self.qr_stopped = 0
+        self.qr_value = None
+        self.qr_error = None
+        self.qr_shown = []
+
+    def pause_work(self):
+        self.work_paused = True
+
+    def resume_work(self, duration):
+        self.work_paused = False
+        self.pause_duration = duration
+
+    def prepare_work(self):
+        pass
+
+    def start_work(self, area, task_id, binding):
+        self.work_starts.append((area, task_id, binding))
+        self.work_done = False
+
+    def tick_work(self, odom, odom_at):
+        return dict(done=self.work_done, label='底盘对准2号环', velocity=[.01, 0., 0.])
+
+    def cancel_work(self):
+        self.work_cancelled = True
+
+    def work_released(self):
+        return self.work_free
+
+    def start_qr(self):
+        self.qr_started += 1
+
+    def tick_qr(self):
+        if self.qr_error:
+            raise RuntimeError(self.qr_error)
+        return self.qr_value
+
+    def stop_qr(self):
+        self.qr_stopped += 1
+
+    def show_qr(self, result):
+        self.qr_shown.append(result)
 
     def screen_start(self):
         self.screen_open = True
@@ -82,9 +126,10 @@ class SessionTests(unittest.TestCase):
         self.s.heartbeat('browser-one')
 
     def begin(self, mode='free', start=1, goal=2, heading='DOWN', align=False, exit_start=False,
-              blocked_edges=None):
+              blocked_edges=None, work_alignment=False):
         self.s.command('start', dict(mode=mode, start=start, goal=goal, heading=heading,
                                      align=align, exit_start=exit_start,
+                                     work_alignment=work_alignment,
                                      blocked_edges=blocked_edges or []), 'browser-one')
         self.io.reply('get_runtime', {'runtime': self.rt})
         payload = self.io.calls[-1][1]
@@ -126,17 +171,95 @@ class SessionTests(unittest.TestCase):
                        current_node=req['goal'], current_heading=heading)
         self.io.reply('get_runtime', {'runtime': self.rt})
 
+    def test_serial_loss_keeps_active_route_and_resumes_without_new_plan(self):
+        self.begin()
+        self.plan()
+        request = self.s.request_id
+        self.s.board.update(connected=False, motion_allowed=False, fault_reason='serial disconnected')
+        self.s.tick()
+        self.assertEqual(self.s.state, 'NAVIGATING')
+        self.assertTrue(self.io.work_paused)
+        self.assertEqual(self.io.commands[-1][:3], (0., 0., 0.))
+        self.feedback(sequence=2)
+        self.assertEqual(self.io.commands[-1][:3], (0., 0., 0.))
+        self.clock.now += .3
+        self.refresh()
+        self.s.board['fault_reason'] = ''
+        self.s.tick()
+        self.assertEqual(self.s.state, 'NAVIGATING')
+        self.assertEqual(self.s.request_id, request)
+        self.feedback(sequence=3)
+        self.assertEqual(self.io.commands[-1][:3], (.5, 0., 0.))
+        self.assertFalse(self.io.work_paused)
+        self.assertAlmostEqual(self.io.pause_duration, .3)
+
+    def test_work_alignment_at_two_coarse_visits_and_only_first_storage(self):
+        self.begin(mode='competition', goal=3, work_alignment=True)
+        for index in range(10):
+            self.complete()
+            if self.s.state == 'WAITING':
+                self.clock.now += CONFIG['wait_s']
+                self.refresh()
+                self.s.tick()
+                if index in (3, 4, 6):
+                    self.assertEqual(self.s.state, 'WORKING')
+                    self.s.tick()
+                    self.assertEqual(self.io.commands[-1][:3], (.01, 0., 0.))
+                    self.assertFalse(any(c[0] == 'plan' for c in self.io.calls))
+                    self.io.work_done = True
+                    self.io.work_free = False
+                    self.s.tick()
+                    self.assertEqual(self.s.state, 'WORKING')
+                    self.io.work_free = True
+                    self.s.tick()
+                self.assertEqual(self.s.state, 'NAVIGATING')
+        self.assertEqual(self.s.state, 'FINISHED')
+        self.assertEqual([s[0] for s in self.io.work_starts], ['coarse', 'storage', 'coarse'])
+
+    def test_stop_during_work_waits_for_arm_release(self):
+        self.begin(mode='competition', goal=3, work_alignment=True)
+        for _ in range(4):
+            self.complete()
+            if self.s.state == 'WAITING':
+                self.clock.now += CONFIG['wait_s']
+                self.refresh()
+                self.s.tick()
+        self.assertEqual(self.s.state, 'WORKING')
+        self.io.work_free = False
+        self.s.command('stop', {}, 'observer')
+        self.assertTrue(self.io.work_cancelled)
+        self.assertEqual(self.io.commands[-1], (0., 0., 0.))
+        self.io.reply('get_runtime', {'runtime': self.rt})
+        self.assertEqual(self.s.state, 'STOPPING')
+        self.io.work_free = True
+        self.s.tick()
+        self.io.reply('get_runtime', {'runtime': self.rt})
+        self.assertEqual(self.s.state, 'STOPPED')
+
+    def test_work_alignment_survives_screen_configuration(self):
+        self.s.command('start', dict(mode='screen', work_alignment=True), 'browser-one')
+        self.s.screen_message('ROUTE', ())
+        self.s.screen_message('CFG', (1, 3))
+        self.s.screen_message('START', ())
+        self.assertTrue(self.s.settings['work_alignment'])
+        self.assertEqual(self.s.state, 'INITIALIZING')
+        for raw in (dict(start=1, goal=2, work_alignment=True),
+                    dict(mode='competition', start=1, goal=3, work_alignment=1)):
+            with self.assertRaises(ValueError):
+                settings_from(raw)
+
     def test_arbitrary_initial_pose_and_terminal_before_response(self):
         self.begin(start=7, goal=9, heading='LEFT')
         self.complete(finish_early=True)
         self.assertEqual(self.s.state, 'FINISHED')
         self.assertTrue(all(cmd == (0., 0., 0.) for cmd in self.io.commands))
 
-    def screen_setup(self, start=1, goal=2, routes=(1,)):
+    def screen_setup(self, start=1, goal=3, routes=(1,), real_qr=False):
         self.s.command('start', dict(mode='screen', start=9, goal=9,
-                                    blocked_edges=[[1, 2]]), 'browser-one')
+                                    blocked_edges=[[1, 2]], real_qr=real_qr), 'browser-one')
         self.s.screen_message('ROUTE', routes)
         self.s.screen_message('CFG', (start, goal))
+        self.s.screen_message('START', ())
         self.s.tick()
         self.io.reply('get_runtime', {'runtime': self.rt})
         self.rt.update(run_id=self.s.run_id, current_node=self.s.settings['start'],
@@ -149,24 +272,111 @@ class SessionTests(unittest.TestCase):
         self.refresh()
         self.s.tick()
 
+    def reach_qr(self):
+        self.screen_setup(real_qr=True)
+        self.assertEqual(self.io.qr_started, 0)
+        self.clock.now += 2.01
+        self.refresh()
+        self.s.tick()
+        self.complete()  # EXIT
+        self.assertEqual(self.io.qr_started, 0)
+        self.complete()  # QR station arrival and executor release
+        self.assertEqual(self.s.state, 'SCANNING')
+        self.assertEqual(self.io.qr_started, 1)
+        self.assertFalse(self.io.calls)
+
+    def test_real_qr_waits_at_station_displays_result_and_continues_once(self):
+        self.reach_qr()
+        for _ in range(8):
+            self.clock.now += 1.
+            self.refresh()
+            self.s.tick()
+            self.assertEqual(self.s.state, 'SCANNING')
+            self.assertEqual(self.io.commands[-1], (0., 0., 0.))
+            self.assertFalse(self.io.calls)
+        self.io.qr_value = '156+123+516+231'
+        self.s.tick()
+        self.assertEqual(self.s.state, 'NAVIGATING')
+        self.assertEqual(self.io.calls[-1][1]['goal'], 4)
+        self.assertEqual(self.io.qr_stopped, 1)
+        self.assertEqual(self.io.qr_shown, [self.io.qr_value])
+        self.assertEqual(self.s.snapshot()['qr_result'], self.io.qr_value)
+        self.s.tick()
+        self.assertEqual(self.io.qr_started, 1)
+        with self.assertRaises(ValueError):
+            self.s.command('start', dict(mode='screen', real_qr=False), 'browser-one')
+
+    def test_real_qr_stop_fault_and_browser_loss_release_camera_without_continuing(self):
+        for action in ('stop', 'camera', 'browser', 'odometry', 'binding'):
+            with self.subTest(action=action):
+                self.setUp()
+                self.reach_qr()
+                if action == 'stop':
+                    self.s.command('stop', {}, 'other-browser')
+                elif action == 'camera':
+                    self.io.qr_error = '扫码相机断流'
+                    self.s.tick()
+                elif action == 'browser':
+                    self.clock.now += 9.
+                    self.s.tick()
+                elif action == 'odometry':
+                    self.clock.now += .6
+                    self.s.update_board(self.s.board)
+                    self.s.tick()
+                else:
+                    self.s.update_board(dict(self.s.board, motion_epoch=2))
+                self.assertEqual(self.s.state, 'STOPPING')
+                self.assertEqual(self.io.qr_stopped, 1)
+                self.assertEqual(self.io.commands[-1], (0., 0., 0.))
+                self.assertFalse(any(kind == 'plan' for kind, _, _ in self.io.calls))
+                self.assertIsNone(self.s.qr_result)
+                self.io.reply('get_runtime', {'runtime': self.rt})
+                self.s.command('reset', dict(mode='screen'), 'browser-one')
+                self.assertIsNone(self.s.snapshot()['qr_result'])
+
+    def test_real_qr_option_only_accepts_boolean_and_screen_mode(self):
+        for raw in (dict(mode='free', start=1, goal=2, real_qr=True),
+                    dict(mode='competition', start=1, goal=3, real_qr=True),
+                    dict(mode='screen', real_qr=1)):
+            with self.assertRaises(ValueError):
+                self.s.command('start', raw, 'browser-one')
+        self.screen_setup()
+        self.clock.now += 2.01
+        self.refresh()
+        self.s.tick()
+        self.complete()
+        self.complete()
+        self.assertEqual(self.s.state, 'WAITING')
+        self.assertEqual(self.io.qr_started, 0)
+
     def test_screen_gate_ignores_browser_configuration_and_requires_route_ok(self):
         self.s.screen_message('ROUTE', (1,))
-        self.s.screen_message('CFG', (2, 1))
+        self.s.screen_message('CFG', (3, 1))
+        self.s.screen_message('START', ())
         self.assertIsNone(self.s.settings)
         self.s.command('start', dict(mode='screen', start=9, goal=9), 'browser-one')
         self.assertTrue(self.io.screen_open)
-        self.s.screen_message('CFG', (2, 1))
+        self.s.screen_message('CFG', (3, 1))
+        self.s.screen_message('START', ())
         self.assertEqual(self.s.state, 'SCREEN_SETUP')
         self.assertFalse(self.io.calls)
         self.s.screen_message('ROUTE', (1, 5, 12))
-        self.s.screen_message('CFG', (2, 1))
+        self.s.screen_message('CFG', (3, 1))
+        self.assertEqual(self.s.state, 'SCREEN_SETUP')
+        self.clock.now += 3.
+        self.s.heartbeat('browser-one')
+        self.s.tick()
+        self.assertEqual(self.s.state, 'SCREEN_SETUP')
+        self.assertFalse(self.io.calls)
+        self.s.screen_message('START', ())
         self.assertEqual(self.s.settings['start'], 3)
         self.assertEqual(self.s.settings['goal'], 1)
         self.assertEqual(self.s.settings['heading'], 'UP')
         self.assertEqual(self.s.settings['blocked_edges'], [(1, 2), (3, 6), (4, 7)])
         before = self.s.settings.copy()
         self.s.screen_message('ROUTE', ())
-        self.s.screen_message('CFG', (1, 2))
+        self.s.screen_message('CFG', (1, 3))
+        self.s.screen_message('START', ())
         self.assertEqual(self.s.settings, before)
 
     def test_screen_two_seconds_then_full_competition_and_reset_gate(self):
@@ -202,9 +412,10 @@ class SessionTests(unittest.TestCase):
         self.s.command('reset', dict(mode='screen'), 'browser-one')
         self.assertEqual(self.s.state, 'IDLE')
         self.assertIsNone(self.s.screen_routes)
-        self.assertEqual(self.s.settings, dict(mode='screen', blocked_edges=[]))
+        self.assertEqual(self.s.settings, dict(mode='screen', blocked_edges=[], work_alignment=False, real_qr=False))
         self.s.screen_message('ROUTE', (2,))
         self.s.screen_message('CFG', (1, 1))
+        self.s.screen_message('START', ())
         self.assertEqual(self.s.state, 'IDLE')
         self.s.command('start', dict(mode='screen'), 'browser-one')
         self.assertEqual(self.s.state, 'SCREEN_SETUP')
@@ -214,6 +425,7 @@ class SessionTests(unittest.TestCase):
         self.s.command('start', dict(mode='screen'), 'browser-one')
         self.s.screen_message('ROUTE', ())
         self.s.screen_message('CFG', (1, 1))
+        self.s.screen_message('START', ())
         self.clock.now += 2.5
         self.s.heartbeat('browser-one')
         self.s.tick()
@@ -239,6 +451,7 @@ class SessionTests(unittest.TestCase):
         self.s.command('start', dict(mode='screen'), 'browser-one')
         self.s.screen_message('ROUTE', ())
         self.s.screen_message('CFG', (1, 1))
+        self.s.screen_message('START', ())
         self.clock.now += CONFIG['initialization_timeout_s'] + .1
         self.s.heartbeat('browser-one')
         self.s.tick()
@@ -257,6 +470,7 @@ class SessionTests(unittest.TestCase):
         self.refresh()
         self.s.screen_message('ROUTE', ())
         self.s.screen_message('CFG', (1, 1))
+        self.s.screen_message('START', ())
         self.s.tick()
         self.assertEqual(self.s.state, 'STOPPED')
         self.assertFalse(self.io.calls)
@@ -296,7 +510,7 @@ class SessionTests(unittest.TestCase):
                     self.assertEqual(request['parking_maneuver'], '')
                     self.assertEqual(request['goal'], 2)
                     self.assertTrue(request['align_at_goal'])
-                    self.assertEqual(request['goal_heading'], 'DOWN')
+                    self.assertEqual(request['goal_heading'], 'RIGHT')
                     self.complete()
                     self.assertEqual(self.s.state, 'FINISHED')
                     self.assertFalse(self.io.calls)
@@ -337,7 +551,7 @@ class SessionTests(unittest.TestCase):
                         working = 1 <= index <= 7
                         self.assertEqual(req['align_at_goal'], working)
                         self.assertEqual(req['goal_heading'],
-                                         {2: 'DOWN', 4: 'LEFT', 6: 'RIGHT', 8: 'DOWN'}[target]
+                                         {2: 'RIGHT', 4: 'LEFT', 6: 'RIGHT', 8: 'DOWN'}[target]
                                          if working else '')
                         self.assertEqual(req['parking_maneuver'],
                                          'EXIT' if index == 0 else 'ENTER' if index == 9 else '')

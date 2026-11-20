@@ -1,0 +1,296 @@
+{
+  "date": "2026-11-18",
+  "timezone": "Asia/Shanghai",
+  "platform": "actual X5 BPU",
+  "source": "current agv_perception.work_vision.RingVision used by 8086/8087",
+  "measurement": "unique completed Observation sequences over 15 seconds per phase after 3-second warmup; preview enabled",
+  "live_scene": "no detected targets",
+  "target_scene": "real still photos replayed at 30Hz, actual BPU inference and geometric center extraction",
+  "limitations": "8087 was not running; full ROS/HTTP/competition load not measured; photo replay does not represent moving live targets",
+  "motion_commands": false,
+  "phases": [
+    {
+      "name": "material_all",
+      "kind": "material",
+      "geometry_target": 0,
+      "largest_per_color": false,
+      "duration_s": 15.001,
+      "unique_results": 442,
+      "results_fps": 29.46,
+      "one_second_counts": [
+        30,
+        29,
+        30,
+        29,
+        30,
+        29,
+        30,
+        30,
+        29,
+        29,
+        30,
+        29,
+        30,
+        29,
+        29
+      ],
+      "capture_fps_range": [
+        30.0,
+        30.1
+      ],
+      "result_interval_ms": {
+        "median": 33.83,
+        "p95": 36.37,
+        "max": 41.21
+      },
+      "observation_age_ms": {
+        "median": 48.61,
+        "p95": 64.58
+      },
+      "color_counts": {},
+      "ring_counts": {},
+      "center_sources": {},
+      "last_metrics": {
+        "capture_fps": 30.1,
+        "processing_fps": 29.2,
+        "preview_fps": 14.9,
+        "stages_ms": {
+          "yolo": 26.969734999966022,
+          "geometry": 0.01004199998533295,
+          "handoff": 4.1689790000418725,
+          "capture_to_result": 61.45433200003936,
+          "preview": 13.2710309999311
+        }
+      }
+    },
+    {
+      "name": "raw_selected_color",
+      "kind": "material",
+      "geometry_target": 1,
+      "largest_per_color": true,
+      "duration_s": 15.0,
+      "unique_results": 443,
+      "results_fps": 29.53,
+      "one_second_counts": [
+        30,
+        30,
+        29,
+        30,
+        29,
+        30,
+        29,
+        29,
+        30,
+        29,
+        30,
+        29,
+        30,
+        29,
+        30
+      ],
+      "capture_fps_range": [
+        30.0,
+        30.1
+      ],
+      "result_interval_ms": {
+        "median": 33.81,
+        "p95": 36.19,
+        "max": 38.45
+      },
+      "observation_age_ms": {
+        "median": 48.78,
+        "p95": 64.03
+      },
+      "color_counts": {},
+      "ring_counts": {},
+      "center_sources": {},
+      "last_metrics": {
+        "capture_fps": 30.0,
+        "processing_fps": 29.5,
+        "preview_fps": 15.0,
+        "stages_ms": {
+          "yolo": 26.717605999920124,
+          "geometry": 0.010541999927227153,
+          "handoff": 3.5939700001108577,
+          "capture_to_result": 46.04843700008132,
+          "preview": 15.810778000059145
+        }
+      }
+    },
+    {
+      "name": "ring_center_2",
+      "kind": "ring",
+      "geometry_target": 2,
+      "largest_per_color": false,
+      "duration_s": 15.0,
+      "unique_results": 443,
+      "results_fps": 29.53,
+      "one_second_counts": [
+        31,
+        29,
+        30,
+        29,
+        29,
+        30,
+        30,
+        29,
+        30,
+        29,
+        29,
+        30,
+        29,
+        30,
+        29
+      ],
+      "capture_fps_range": [
+        29.9,
+        30.2
+      ],
+      "result_interval_ms": {
+        "median": 33.93,
+        "p95": 39.3,
+        "max": 41.26
+      },
+      "observation_age_ms": {
+        "median": 46.64,
+        "p95": 63.45
+      },
+      "color_counts": {},
+      "ring_counts": {},
+      "center_sources": {},
+      "last_metrics": {
+        "capture_fps": 30.0,
+        "processing_fps": 29.5,
+        "preview_fps": 15.0,
+        "stages_ms": {
+          "yolo": 27.100195000002714,
+          "geometry": 0.08404299978792551,
+          "handoff": 3.5112190000745613,
+          "capture_to_result": 47.79612900006214,
+          "preview": 23.038134999978865
+        }
+      }
+    },
+    {
+      "name": "material_targets_all",
+      "kind": "material",
+      "geometry_target": 0,
+      "largest_per_color": true,
+      "duration_s": 15.001,
+      "unique_results": 354,
+      "results_fps": 23.6,
+      "one_second_counts": [
+        25,
+        23,
+        24,
+        24,
+        23,
+        24,
+        23,
+        23,
+        23,
+        24,
+        23,
+        24,
+        23,
+        24,
+        24
+      ],
+      "capture_fps_range": [
+        30.0,
+        30.0
+      ],
+      "result_interval_ms": {
+        "median": 42.23,
+        "p95": 44.57,
+        "max": 50.05
+      },
+      "observation_age_ms": {
+        "median": 59.73,
+        "p95": 75.28
+      },
+      "color_counts": {
+        "3": 354,
+        "5": 354,
+        "6": 354
+      },
+      "ring_counts": {},
+      "center_sources": {
+        "circle": 1062
+      },
+      "last_metrics": {
+        "capture_fps": 30.0,
+        "processing_fps": 23.7,
+        "preview_fps": 15.0,
+        "stages_ms": {
+          "yolo": 29.447022000113066,
+          "geometry": 7.47898599979635,
+          "handoff": 4.278980999742998,
+          "capture_to_result": 65.91963466667039,
+          "preview": 18.066268999973545
+        }
+      },
+      "photo": "/root/material_deploy_v1/check_black_blues.jpg"
+    },
+    {
+      "name": "ring_targets_all",
+      "kind": "ring",
+      "geometry_target": 0,
+      "largest_per_color": false,
+      "duration_s": 15.001,
+      "unique_results": 442,
+      "results_fps": 29.47,
+      "one_second_counts": [
+        30,
+        29,
+        30,
+        29,
+        29,
+        30,
+        29,
+        30,
+        29,
+        30,
+        29,
+        30,
+        29,
+        29,
+        30
+      ],
+      "capture_fps_range": [
+        30.0,
+        30.0
+      ],
+      "result_interval_ms": {
+        "median": 33.92,
+        "p95": 39.36,
+        "max": 43.88
+      },
+      "observation_age_ms": {
+        "median": 75.29,
+        "p95": 91.49
+      },
+      "color_counts": {},
+      "ring_counts": {
+        "2": 442,
+        "3": 442
+      },
+      "center_sources": {
+        "circle": 884
+      },
+      "last_metrics": {
+        "capture_fps": 30.0,
+        "processing_fps": 29.3,
+        "preview_fps": 14.4,
+        "stages_ms": {
+          "handoff": 5.307370999844352,
+          "yolo": 32.70061200009877,
+          "geometry": 21.572821000063414,
+          "capture_to_result": 62.473952000118516,
+          "preview": 31.393510000043534
+        }
+      },
+      "photo": "/root/工创/ring_dataset_raw/20261031_204850_882246/ring_20261031_210506_485271_000197.jpg"
+    }
+  ]
+}

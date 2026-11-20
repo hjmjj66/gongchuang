@@ -1,0 +1,136 @@
+# 独立原料/粗加工/暂存调试参数；保守初值，需现场标定。网页保存，下一次开始生效。
+motion_config: /root/工创/ros2_ws/src/agv_perception/config/work_motion.yaml
+debug:
+  calibration_raw_config: /root/工创/ros2_ws/src/agv_perception/config/raw.yaml
+  calibration_coarse_config: /root/工创/ros2_ws/src/agv_perception/config/coarse.yaml
+  calibration_storage_config: /root/工创/ros2_ws/src/agv_perception/config/storage.yaml
+  host: 0.0.0.0
+  port: 8086
+  browser_timeout_s: 8.0
+  preview_width: 960
+coarse:
+  arm:
+    work_pose_cmd: 3
+    place_cmd: 6
+    pick_cmd: 5
+    stow_cmd: 2
+  vision:
+    ring_config: /root/工创/ros2_ws/src/agv_perception/config/ring.yaml
+    material_config: /root/工创/ros2_ws/src/agv_perception/config/material.yaml
+    model_runtime_path: /root/material_deploy_v1/rdk_model_zoo
+    target_uv_px:
+      [637.2390542625271, 371.6158804156483]
+    max_frame_age_s: 0.5
+    camera_start_timeout_s: 10
+  ring_search:
+    yaw_rad_s: 0.02
+    duration_s: 0.5
+  exit_motion:
+    max_vx_mps: 0.03
+    max_vy_mps: 0.03
+    position_tolerance_m: 0.001
+    kp: 1
+    timeout_s: 15
+  gantry_presets:
+    positions:
+      '1':
+        fb_pulses: 4545
+        yaw_rad: 0.8538172245025635
+      '3':
+        fb_pulses: 2115
+        yaw_rad: -0.4385814666748047
+  execution:
+    control_rate_hz: 50.0
+    zero_settle_time_s: 0.1
+    feedback_timeout_s: 0.2
+    arm_request_timeout_s: 5
+    lease_timeout_s: 1
+storage:
+  arm:
+    work_pose_cmd: 3
+    place_cmd: 6
+    stow_cmd: 2
+    stack_cmd: 7
+  vision:
+    ring_config: /root/工创/ros2_ws/src/agv_perception/config/ring.yaml
+    material_config: /root/工创/ros2_ws/src/agv_perception/config/material.yaml
+    model_runtime_path: /root/material_deploy_v1/rdk_model_zoo
+    target_uv_px:
+      [637.2390542625271, 371.6158804156483]
+    stack_target_uv_px:
+      [636.5, 372.5]
+    max_frame_age_s: 0.5
+    camera_start_timeout_s: 10.0
+  ring_search:
+    yaw_rad_s: 0.02
+    duration_s: 0.5
+    scan_settle_frames: 3
+  exit_motion:
+    max_vx_mps: 0.03
+    max_vy_mps: 0.03
+    position_tolerance_m: 0.001
+    kp: 1.0
+    timeout_s: 15.0
+  gantry_presets:
+    positions:
+      '1':
+        fb_pulses: 4545
+        yaw_rad: 0.8538172245025635
+      '3':
+        fb_pulses: 2115
+        yaw_rad: -0.4385814666748047
+  execution:
+    control_rate_hz: 50.0
+    zero_settle_time_s: 0.1
+    feedback_timeout_s: 0.2
+    arm_request_timeout_s: 5.0
+    lease_timeout_s: 1.0
+raw:
+  arm:
+    work_pose_cmd: 3
+    pick_cmd: 4
+    stow_cmd: 2
+  vision:
+    material_config: /root/工创/ros2_ws/src/agv_perception/config/material.yaml
+    target_uv_px:
+      [637.5, 375.5]
+    max_frame_age_s: 0.5
+    camera_start_timeout_s: 10.0
+  grasp_gate:
+    qualified_frames: 2
+    tolerance_px: 144
+    small_yaw_rad_s: 0.06
+    small_fb_rpm: 1.5
+  execution:
+    control_rate_hz: 50.0
+    feedback_timeout_s: 0.2
+    arm_request_timeout_s: 5.0
+    lease_timeout_s: 1.0
+    zero_settle_time_s: 0.1
+  base_motion:
+    # 沿到站车头工作方向前进的距离；三件完成后退回或交由离区导航吸收，单位 mm。
+    distance_mm: 12.0
+    max_vx_mps: 0.03
+    max_vy_mps: 0.03
+    kp: 1.0
+    position_tolerance_m: 0.001
+    stop_speed_mps: 0.005
+    timeout_s: 15.0
+  gantry_servo:
+    max_yaw_rad_s: 0.7
+    max_fb_rpm: 40
+    yaw_pid:
+      kp: 0.006
+      ki: 0.0
+      kd: 0.0
+    fb_pid:
+      kp: 0.5
+      ki: 0.0
+      kd: 0.0
+  motion_prediction:
+    enabled: true
+    measurement_std_px: 2.0
+    acceleration_std_px_s2: 500.0
+    initial_velocity_std_px_s: 100.0
+    extra_delay_s: 0.0
+    max_horizon_s: 0.15

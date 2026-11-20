@@ -33,6 +33,7 @@ class BoardPeer:
         self.vy = 0.
         self.wz = 0.
         self.flags = 0x0D
+        self.fb_pulses, self.ud_pulses, self.pos_flags = 3802, -4810, 7
         self.send_odom = True
         self.simulate_motion = False
         self.command = (0., 0., 0., 0)
@@ -72,7 +73,8 @@ class BoardPeer:
                     last_step = now
                     if tick % 5 == 1:
                         os.write(self.master, encode_frame(STATUS, STATUS_STRUCT.pack(
-                            tick, 1, 0, 15, 0, 0., 0., 0., self.source)))
+                            tick, 1, 0, 15, 0, self.fb_pulses, self.ud_pulses, 0.,
+                            self.source, self.pos_flags)))
                     if self.send_odom:
                         os.write(self.master, encode_frame(ODOM, ODOM_STRUCT.pack(
                             tick, self.x, self.y, self.yaw,
@@ -144,6 +146,12 @@ class RosPtyTests(unittest.TestCase):
                 self.assertTrue(predicate(), 'timed out waiting for yaw pipeline')
 
             wait_for(lambda: local and raw and statuses and statuses[-1].motion_allowed)
+            self.assertEqual((statuses[-1].fb_pulses, statuses[-1].ud_pulses, statuses[-1].pos_flags),
+                             (3802, -4810, 7))
+            board.pos_flags = 2
+            wait_for(lambda: statuses[-1].pos_flags == 2)
+            self.assertEqual((statuses[-1].fb_pulses, statuses[-1].ud_pulses), (3802, -4810))
+            self.assertTrue(statuses[-1].motion_allowed)
             pump(.5)
             self.assertGreater(len(local), 20)
             session = local[-1].odom_session_id

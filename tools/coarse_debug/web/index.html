@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>原料区 / 粗加工区 / 暂存区 · 作业调试</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div><span class="eyebrow">AGV / WORK AREA DEBUG</span><h1>原料区 / 粗加工区 / 暂存区 · 作业调试</h1></div><span id="connection" class="badge">连接中</span></header>
+<p id="motionNotice" class="notice">三个区域会驱动真实底盘与龙门架。开始前核对所选区域与现场；参数为待标定低速初值。</p>
+<main>
+  <section class="panel camera"><div class="section-title"><h2 id="visionTitle">圆环识别与准心</h2><span id="frame">等待图像</span></div>
+    <label for="materialModel">物料识别模式</label>
+    <select id="materialModel" disabled><option value="original">原有识别（按启动配置）</option><option value="jhb">JHB 模型 · Lab 六色</option><option value="test_combine">test_combine · 原 YOLO 颜色 + JHB 中心</option></select>
+    <p id="materialModelStatus" class="muted">等待物料模型状态…</p>
+    <p id="performance" class="muted"></p>
+    <div class="picture"><img id="preview" alt="等待主摄像头识别画面"><svg id="overlay" aria-hidden="true"><path id="cross" stroke="#f9b928" stroke-width="2" fill="none"/><circle id="selectedPoint" r="10" stroke="#17d9ee" stroke-width="3" fill="none" hidden/></svg></div>
+    <p id="visionStatus" class="muted">等待控制端提供当前区域的相机及准心信息。</p>
+    <div id="rings" class="chips"></div>
+    <h2>控制观测</h2><pre id="diagnostic">—</pre>
+  </section>
+  <section class="panel controls"><h2>任务控制</h2>
+    <label class="order-label">控制模式<select id="controlMode"><option value="task">作业流程</option><option value="tracking">追踪模式 · 仅伸缩和旋转</option><option value="calibration">标定模式 · 准心 / 机构初值</option></select></label>
+    <div id="areaSelection" class="mode-grid">
+      <label>作业区域<select id="area"><option value="raw">原料区</option><option value="coarse">粗加工区</option><option value="storage">暂存区</option></select></label>
+      <label id="visitGroup">第几次到达<select id="visit"><option value="1">第一次 · 第一层平放</option><option value="2">第二次 · 同色码垛</option></select></label>
+    </div>
+    <div id="taskInputs">
+    <label class="order-label" for="taskExecution">取放执行方式</label>
+    <select id="taskExecution"><option value="simulated">1 秒模拟 · 取放停车等待</option><option value="real">真实执行 · 下位机取放程序</option></select>
+    <p id="executionHint" class="muted">仅取放动作以 1 秒等待替代；底盘、伸缩、旋转、工作位和收纳仍真实执行。</p>
+    <label id="orderLabel" class="order-label" for="order">圆环顺序（1、2、3 各一次）</label>
+    <input id="order" value="213" inputmode="numeric" maxlength="3" pattern="[123]{3}" autocomplete="off">
+    <div id="layoutGroup" hidden>
+      <label for="layout">第一层布局 · 按圆环 1、2、3 填颜色编号</label>
+      <input id="layout" value="156" inputmode="numeric" maxlength="3" pattern="[1-6]{3}" autocomplete="off">
+      <p class="muted">例如 156：环1红色、环2黑色、环3浅蓝色。由人工摆放，任务开始前确认一致。</p>
+    </div>
+    <p id="colorLegend" class="muted" hidden>颜色：1 红 / 2 黄 / 3 蓝 / 4 绿 / 5 黑 / 6 浅蓝</p>
+    </div>
+    <div id="trackingInputs" hidden>
+      <label class="order-label" for="trackingTarget">追踪单个目标</label><select id="trackingTarget"></select>
+      <p class="muted">提前摆好机构高度；从当前位置持续追踪。目标丢失时停轴等待，重现后自动继续。</p>
+    </div>
+    <div id="calibrationInputs" hidden>
+      <label class="order-label" for="calibrationType">标定类型</label>
+      <select id="calibrationType"><option value="raw">原料区取料 · 物料中心</option><option value="ring">粗加工 / 暂存第一次 · 圆环中心</option><option value="stack">暂存第二次 · 物料中心</option><option value="shared_pose">粗加工 / 暂存区共用 · 1/3号机构初值</option></select>
+      <div id="calibrationFbControls" hidden>
+        <div class="buttons"><button id="calibrationTrackFb" type="button" class="secondary" disabled>仅伸缩跟随2号环 · debug</button><button id="calibrationFbStop" type="button" class="danger">停止</button></div>
+        <p class="muted">从当前位置持续跟随2号环，只用竖直图像PID控制伸缩；底盘、旋转与升降不动。对准已保存准心，手动停止，不自动保存。</p>
+      </div>
+      <div id="presetControls" hidden>
+        <p class="muted">粗加工和暂存两次共用1号、3号的角度与伸缩位置，各标定一次即可。选择圆环即可开始纯PID追踪，无需先调整底盘。随时点击保存，即记录当前实际位置并停止追踪；停止或异常后也能保存，无需等待收敛。调整与追踪使用粗加工 / 暂存共用运动参数。</p>
+        <div class="buttons"><button id="presetAdjust" type="button" disabled>调整 · 纠偏并对准2号环</button><button id="presetTrack" type="button" disabled>开始纯PID追踪</button></div>
+        <div class="buttons"><button id="presetSave" type="button" class="secondary" disabled>保存机构初值并同步正式流程</button><button id="presetStop" type="button" class="danger">停止</button></div>
+        <p id="presetStatus" class="muted"></p><pre id="presetPositions">尚未保存机构初值</pre>
+      </div>
+      <label class="order-label" for="calibrationTarget">用于采点的目标</label><select id="calibrationTarget"></select>
+      <p id="calibrationTargetStatus" class="muted">等待当前类型的实时画面…</p>
+      <div id="aimCalibrationControls">
+      <label class="order-label" for="calibrationPoint">本次采集坐标 [u, v] · 原图像素</label><input id="calibrationPoint" readonly placeholder="手工对准后点击下方采点按钮">
+      <div class="buttons"><button id="calibrationCapture" type="button" disabled>取当前目标点</button><button id="calibrationSave" type="button" class="secondary" disabled>保存并同步正式流程</button></div>
+      <p class="muted">只预览与采点，可用遥控器手工对准。青色圆圈标出所选目标，黄色十字表示已保存或本次采集的标定点。保存后同时更新8086及正式比赛配置，下次启动任务生效。</p>
+      <p id="calibrationSaved" class="muted"></p>
+      </div>
+    </div>
+    <p id="route" class="muted">高位纠偏 → 底盘对准环2 → 按序放置 → 按记录机构位置取回 → 高位纠偏 → 收拢</p>
+    <div id="motionButtons" class="buttons"><button id="start" disabled>开始</button><button id="stop" class="danger">停止</button></div>
+    <div id="trackingActionGroup" hidden><button id="trackingAction" type="button" class="secondary" disabled>执行取放</button><p id="trackingActionHint" class="muted"></p></div>
+    <p id="message" role="status" aria-live="polite">正在连接控制端…</p>
+    <div class="status-row"><span>当前步骤</span><strong id="phase">待机</strong></div>
+    <div class="status-row"><span>底盘 / 控制权</span><strong id="health">等待反馈</strong></div>
+    <div class="status-row"><span>机构前后 / 上下位置</span><strong id="armPosition">等待反馈</strong></div>
+    <div class="status-row"><span>当前目标</span><strong id="target">—</strong></div>
+    <div id="angleRow" class="status-row"><span>首 / 尾纠偏</span><strong id="angles">—</strong></div>
+    <div class="status-row"><span>当前位置 x / y / yaw</span><strong id="pose">—</strong></div>
+    <div class="status-row"><span id="referenceLabel">P0 底盘 x / y</span><strong id="reference">—</strong></div>
+    <h2 id="positionsTitle">放置时实际机构位置 · 取回目标</h2>
+    <table id="positionsTable"><thead><tr><th>位置</th><th id="positionCol1">前后位置 脉冲</th><th id="positionCol2">机构角度 rad</th></tr></thead><tbody id="positions"></tbody></table>
+    <p id="scan" class="muted"></p>
+    <p id="progress" class="muted">模拟放料：0 / 3　模拟取料：0 / 3</p>
+    <details id="parameterPanel"><summary>参数编辑与保存</summary>
+      <p id="parameterScope"></p>
+      <p id="parameterHint" class="muted">停止后保存并同步正式比赛参数；网页下次开始、正式节点重启后生效；标为“粗加工 + 暂存共用”的运动参数保存后影响两区；各组说明标明控制对象和单位。准心留空使用实际图像中心；作业流程可选1秒模拟或真实取放。</p>
+      <form id="parameters"></form><button id="save" type="button" class="secondary">保存参数并同步正式比赛</button>
+      <p id="configPath" class="muted path"></p>
+    </details>
+  </section>
+</main>
+<footer>作业流程可选“1 秒模拟”或“真实执行”：前者仅以停车1秒替代取放并实际回工作位，后者发送所选区域的下位机取放程序并等待完成（包含程序自身的升降及回工作位）。底盘、伸缩、旋转、工作位和收纳均真实执行。原料底盘全程固定，每批首件记录唯一m0，前两件抓完返回m0时可被下一目标立即打断，第三件后直接收纳完成；粗加工和暂存第一次在入站纠偏后记录P0，收纳后返回P0，暂存第二次底盘全程锁定。追踪模式仅自动控制伸缩和旋转，手动取放按钮始终真实执行。关闭控制页或失联超过 <span id="browserTimeout">8</span> 秒会停止。</footer>
+<script src="/app.js"></script>
+</body></html>

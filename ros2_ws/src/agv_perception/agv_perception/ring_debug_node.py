@@ -18,6 +18,7 @@ from .camera import CameraStream
 from .ring_detector import DetectorConfig, RingDetector
 from .ring_geometry import GeometryConfig
 from .ring_model import load_ring_model
+from .ring_visualization import draw_result
 
 
 class RingDebugNode(Node):
@@ -40,6 +41,7 @@ class RingDebugNode(Node):
     def _configure(self):
         config = self._read_parameters()
         self._validate_input(config)
+        cv2.setNumThreads(config['opencv_threads'])
         self.mode = config['mode']
         self.input_image = config['input_image']
         self.manual_roi = config['manual_roi']
@@ -58,7 +60,8 @@ class RingDebugNode(Node):
         model = None
         if self.mode == 'combined':
             model = load_ring_model(config['model_path'], config['model_format'],
-                                    config['class_labels'])
+                                    config['class_labels'], config['model_runtime_path'],
+                                    config['confidence_threshold'], config['nms_threshold'])
         self.detector = RingDetector(detector, geometry, model)
         if self.show_preview:
             if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
@@ -85,13 +88,14 @@ class RingDebugNode(Node):
     def _read_parameters(self):
         defaults = {
             'mode': 'combined', 'model_path': '', 'model_format': '',
+            'model_runtime_path': '', 'nms_threshold': 0.7,
             'class_labels': ['1', '2', '3'], 'input_image': '',
             'manual_ring_id': 0, 'show_preview': False, 'output_dir': '',
             'save_every_n_frames': 0,
             'camera_device': '/dev/v4l/by-id/usb-HJ_USB_2.0_Camera_HJ_USB_2.0_Camera_SN0001-video-index0',
             'camera_width': 1280, 'camera_height': 720, 'camera_fps': 30.0,
             'camera_buffer_size': 4, 'camera_dynamic_framerate': False,
-            'process_rate_hz': 15.0, 'max_frame_age_s': 0.5,
+            'process_rate_hz': 30.0, 'max_frame_age_s': 0.5, 'opencv_threads': 2,
             'camera_start_timeout_s': 10.0,
         }
         defaults.update({item.name: getattr(DetectorConfig(), item.name)
@@ -123,7 +127,7 @@ class RingDebugNode(Node):
                 raise ValueError('manual_roi 必须有正宽高。')
         elif config['manual_roi']:
             raise ValueError('combined 模式不接受 manual_roi；手动 ROI 只能用于 geometry_only。')
-        for name in ('camera_width', 'camera_height', 'camera_buffer_size'):
+        for name in ('camera_width', 'camera_height', 'camera_buffer_size', 'opencv_threads'):
             if config[name] <= 0:
                 raise ValueError(f'{name} must be positive')
         for name in ('camera_fps', 'process_rate_hz', 'max_frame_age_s', 'camera_start_timeout_s'):
@@ -210,8 +214,13 @@ class RingDebugNode(Node):
                 candidates = frame[y1:y2, x1:x2].copy()
                 for circle in geometry.candidates:
                     color = (0, 180, 0) if circle.accepted else (0, 0, 180)
-                    cv2.circle(candidates, (round(circle.x), round(circle.y)),
-                               round(circle.radius), color, 1)
+                    if circle.ellipse_axes is not None:
+                        cv2.ellipse(candidates, ((circle.x, circle.y),
+                                    tuple(2 * a for a in circle.ellipse_axes),
+                                    circle.ellipse_angle), color, 1)
+                    else:
+                        cv2.circle(candidates, (round(circle.x), round(circle.y)),
+                                   round(circle.radius), color, 1)
                 _save_image(self.output_dir / f'{name}_candidates.png', candidates)
         if self.show_preview:
             cv2.imshow('Ring detector', preview)
@@ -234,32 +243,6 @@ class RingDebugNode(Node):
             cv2.destroyWindow('Ring detector')
             self.preview_created = False
         return super().destroy_node()
-
-
-def draw_result(frame, result):
-    preview = frame.copy()
-    for item in result.observations:
-        if item.bbox_xyxy is None:
-            continue
-        color = (0, 200, 0) if item.center_source == 'circle' else (0, 165, 255)
-        if not item.valid:
-            color = (0, 0, 220)
-        x1, y1, x2, y2 = (round(v) for v in item.bbox_xyxy)
-        cv2.rectangle(preview, (x1, y1), (x2, y2), color, 2)
-        if item.roi_xyxy is not None:
-            rx1, ry1, rx2, ry2 = item.roi_xyxy
-            cv2.rectangle(preview, (rx1, ry1), (rx2, ry2), (180, 180, 0), 1)
-        label = f'{item.identity_source}:{item.ring_id} {item.center_source or item.status}'
-        if item.yolo_confidence is not None:
-            label += f' {item.yolo_confidence:.2f}'
-        cv2.putText(preview, label, (max(0, x1), max(16, y1 - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
-        if item.valid:
-            center = tuple(round(v) for v in item.center_px)
-            cv2.drawMarker(preview, center, color, cv2.MARKER_CROSS, 16, 2)
-            for radius in item.radii_px:
-                cv2.circle(preview, center, round(radius), color, 1, cv2.LINE_AA)
-    return preview
 
 
 def _save_image(path, frame):

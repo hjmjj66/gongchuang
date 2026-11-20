@@ -5,7 +5,7 @@ import time
 
 import serial
 
-from agv_screen.protocol import END, ScreenMessageParser, task_commands
+from agv_screen.protocol import END, ScreenMessageParser, count_commands, task_commands
 
 
 class Screen:
@@ -40,6 +40,12 @@ class Screen:
         self.outgoing.clear()
         self.parser = ScreenMessageParser()
 
+    def show_task(self, result):
+        self.outgoing.extend(task_commands(result))
+
+    def show_counts(self, pick_count, place_count):
+        self.outgoing.extend(count_commands(pick_count, place_count))
+
     def tick(self, callback):
         if self.ser is None:
             return
@@ -51,11 +57,12 @@ class Screen:
                 callback(kind, values)
         now = time.monotonic()
         if self.outgoing and now >= self.next_send:
-            payload = self.outgoing.popleft().encode('ascii') + END
+            command = self.outgoing.popleft()
+            payload = command.encode('ascii') + END
             written = self.ser.write(payload)
             if written != len(payload):
                 raise OSError(f'屏幕指令未完整写入：{written}/{len(payload)}')
-            self.next_send = now + .1
+            self.next_send = time.monotonic() + (.3 if command == 'page result' else .1)
 
     def close(self):
         self.stop()

@@ -3,7 +3,7 @@
 面向 ROS2 Humble，包 `agv_planning`，可执行文件 `route_planner_node`。
 节点等待地图、二维里程和规划请求，成功规划后自动执行。路线与离散行动链仅作调试查看，实际运动通过速度话题完成。
 
-浏览器实车调试入口见 [tools/route_debug](../../../tools/route_debug/README.md)。工具启动时单独开启 `debug_allow_any_pose`（允许1～9任意初始节点和四个方向）与 `debug_publish_progress`（10 Hz `/route/progress`，`RouteExecutionProgress`，工具内映射到私有话题）。两项正式默认均为false，保留比赛启停区复位限制；进度只供显示，不参与控制。
+浏览器实车调试入口见 [tools/route_debug](../../../tools/route_debug/README.md)。工具启动时单独开启 `debug_allow_any_pose`（允许1～9任意初始节点和四个方向）与 `debug_publish_progress`（20 Hz `/route/progress`，`RouteExecutionProgress`，工具内映射到私有话题）。两项正式默认均为false，保留比赛启停区复位限制；进度只供显示，不参与控制。
 
 路径节点作为mission调用的导航工具：mission只指定目标节点及是否作业对齐，起点和当前朝向仍由路径节点内部确定。路径节点向 `/route/control` 返回速度和执行状态，由mission统一转发速度到 `/C/controll`；C板通信只订阅mission的最终输出。
 
@@ -66,7 +66,9 @@ route_planner_node:
 
 里程反馈为固定会话坐标 `x_m/y_m`（m）与连续航向 `yaw_rad/yaw_deg`，另有实际车体系速度、采样时间、有效性、坐标会话和许可代次。按消息时间和接收时间检查新鲜度，并检查 `/C/status` 的 PC/健康许可。
 
-每段平移记录起点和目标航向，将动作方向旋转到固定系。目标位置在复位后首条有效里程建立，后续路段在原目标上累加位移，避免每段按实际停车位置重新起算而累积误差。显式指定起点或朝向的人工调试请求会重新建立位置基准。调试进度仍显示固定目标方向的有符号投影（mm）与横向偏差，控制使用完整x/y目标位置误差。
+每段平移记录起点和目标航向，将动作方向旋转到固定系。目标位置在复位后首条有效里程建立，后续路段在原目标上累加位移，避免每段按实际停车位置重新起算而累积误差。粗加工/首次暂存可由mission请求收纳后原地停稳交接：导航待命时只更新实际位置，不改写固定系目标，因此下一首段自动吸收作业偏移。不要按作业当前位置重建起点，也不要额外叠加一次回P0位移。P0与导航目标的微小差异不会逐站累积；后续拓扑拐点和封路仍按原计划执行。开关见mission的 `merge_exit_navigation`。
+
+显式指定起点或朝向的人工调试请求会重新建立位置基准。调试进度仍显示固定目标方向的有符号投影（mm）与横向偏差，控制使用完整x/y目标位置误差。
 
 速度字段为 `vx_mps`（向前正，m/s）、`vy_mps`（向左正，m/s）、`omega_deg_s`（逆时针正，°/s）。自动任务还绑定 `odom_session_id/motion_epoch`，mission 原样转发。
 采用明确单位的自定义消息，避免把角度/秒填入规定弧度/秒的 Twist 字段。
@@ -79,7 +81,7 @@ route_planner_node:
 目标航向在复位后的首条有效里程建立，跨动作及正常路线请求保留；转向在原目标上累加有符号转角，过冲后允许反向修正。显式指定起点或朝向的人工调试请求会以当前反馈重新建立航向基准。角度不回绕，跨360°及合并180°转向仍保持规划方向。
 前进、后退、横移和斜移同时运行位置环与角度环，将位置环输出换算到当前车体系，边纠偏边锁头。两条位置轴的绝对误差均不超过 `translation_arrival_tolerance_mm`（当前±3 mm），且角度进入 `turn_arrival_tolerance_deg` 才完成本段；位置到达后若因转动再次偏离，位置环会继续修正。不同动作之间和最终到达时发布零速度；后退优先于掉头再前进，只有终点要求作业朝向时才转头。
 
-执行期间拒绝新请求，保留当前路线。里程/状态消息超时、无效、坐标/运动许可变化，或任一未到达的位置轴、角度误差未缩小时停车并中止，不自动续跑。逐轴监测可检测侧向卡住或斜移单轴不响应，其他轴的推进不能掩盖故障。超时由 `motion_progress_timeout_s` 决定。
+执行期间拒绝新请求，保留当前路线。任一未到达的位置轴或角度误差在 `motion_progress_timeout_s` 内无缩小，视为当前段PID超时：发送零速、记录未达标原因并继续下一段；末段则完成路线。保留固定坐标目标，下一段仍从实际反馈位置纠偏。里程/状态消息超时、无效、坐标/运动许可变化仍停车并中止。
 坐标/运动许可变化后先人工确认当前位置与朝向，通过执行器上下文复位再发新任务，无需重启规划器。路线与视觉任务由调度状态机分配到不同阶段；本节点待命时不持续发布零速度。
 
 ## 参数与朝向
@@ -89,7 +91,7 @@ route_planner_node:
 | 参数 | 默认 | 含义 |
 | --- | --- | --- |
 | `start_area` | `left` | 面向二维码板时，左侧启动区1为left，右侧启动区3为right；开局到2均为前进 |
-| `work_heading.node_2/4/6/8` | YAML：`DOWN/LEFT/RIGHT/DOWN`；未加载配置时 `UNSET` | 四个工作区作业时的车头朝向 |
+| `work_heading.node_2/4/6/8` | YAML：`RIGHT/LEFT/RIGHT/DOWN`；未加载配置时 `UNSET` | 四个工作区作业时的车头朝向 |
 | `default_edge_length_mm` | 1200 | 相邻节点距离，整数mm |
 | `edge_length_mm.<小编号>_<大编号>` | 默认边长 | 无向边实测距离覆盖 |
 | `translation_pid_kp` / `translation_pid_ki` / `translation_pid_kd` | 2.0 / 0.0 / 0.1 | x/y共用位置环增益，分别为1/s、1/s²、无量纲；初值需实车整定，Ki=0关闭积分 |
@@ -100,18 +102,18 @@ route_planner_node:
 | `angle_max_speed_deg_s` | 120.0 | 全部运动共用的PID角速度绝对值上限，°/s |
 | `turn_arrival_tolerance_deg` | 0.2 | 全部运动共用的角度允许误差，±°；平移还需距离到达 |
 | `odometry_timeout_s` | 0.5 | 接收里程反馈的最大间隔 |
-| `motion_progress_timeout_s` | 2.0 | 任一未到达位置轴或角度误差无缩小时的停车时限 |
+| `motion_progress_timeout_s` | 2.0 | 任一未到达位置轴或角度误差无缩小的时限，超时继续下一段 |
 | `control_rate_hz` | 50.0 | 控制发布频率 |
 | `require_map_snapshot` | true | 未收到合法地图时拒绝请求；false用于明确全通调试 |
 
 话题名及 Service 名也可在 YAML 修改。朝向为地图的 UP / RIGHT / DOWN / LEFT。
 
-旧的 `translation_fast_mps / translation_slow_mps / translation_deceleration_mm` 和 `turn_fast_deg_s / turn_slow_deg_s / turn_deceleration_deg` 已分别由位置PID和角度PID参数替代。修改代码后需重新构建 `agv_planning` 并重启；以后只改 YAML 时重启即可。`control_rate_hz` 默认50 Hz，是ROS定时控制频率，不是硬实时调度保证。
+旧的 `translation_fast_mps / translation_slow_mps / translation_deceleration_mm` 和 `turn_fast_deg_s / turn_slow_deg_s / turn_deceleration_deg` 已分别由位置PID和角度PID参数替代。修改代码后需重新构建 `agv_planning` 并重启；以后只改 YAML 时重启即可。8080路线工具启动时额外设置 `debug_motion_config_path`，允许待命时通过原子参数服务保存位置/角度PID、限速和到达容差；先保存当前配置文件，再更新控制器。普通比赛节点未设置该路径，参数仍只读。调试执行快照为20 Hz，包含真实目标和位置/角度误差，供8080按50 ms记录。`control_rate_hz` 默认50 Hz，是ROS定时控制频率，不是硬实时调度保证。
 `start=0` 从规划器当前记录的节点出发，空 `current_heading` 使用反馈 yaw 推导朝向。
 `goal=0` 回到配置启动区。显式 `start=1..9` 需要提供 `current_heading`。
 `align_at_goal=true` 只支持2、4、6、8四个工作区，终点朝向可从 YAML 或请求 `goal_heading` 提供；途中经过工作区不转头。
 
-`work_heading` 和请求中的 `goal_heading` 始终表示车头（+vx）的地图方向。当前约定二维码区用车左侧（+vy）面向二维码板，其余原料、粗加工、暂存区用车右侧（-vy）面向工作区，因此 YAML 中车头方向依次为2向下、4向左、6向右、8向下。到站后按实际朝向执行所需自转，已满足时不转；区间平移保持车头朝向。
+`work_heading` 和请求中的 `goal_heading` 始终表示车头（+vx）的地图方向。当前约定二维码区用车头（车体X轴正方向，+vx）面向二维码板，其余原料、粗加工、暂存区用车右侧（-vy）面向工作区，因此 YAML 中车头方向依次为2向右、4向左、6向右、8向下。到站后按实际朝向执行所需自转，已满足时不转；区间平移保持车头朝向。
 
 ## 调试例子
 

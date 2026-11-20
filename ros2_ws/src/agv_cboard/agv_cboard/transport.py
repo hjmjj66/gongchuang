@@ -10,7 +10,7 @@ from .protocol import FrameParser, encode_chassis
 
 class SerialTransport:
     def __init__(self, port, send_rate, reconnect_interval, on_connected,
-                 on_disconnected, on_frame, get_command, log, on_sent=None):
+                 on_disconnected, on_frame, get_command, log, on_sent=None, get_extra=None):
         self.port = port
         self.period = 1.0 / send_rate
         self.reconnect_interval = reconnect_interval
@@ -20,13 +20,16 @@ class SerialTransport:
         self.get_command = get_command
         self.log = log
         self.on_sent = on_sent
+        self.get_extra = get_extra
+        self._shutdown_frames = ()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name='cboard_serial', daemon=True)
 
     def start(self):
         self._thread.start()
 
-    def stop(self):
+    def stop(self, extra_frames=()):
+        self._shutdown_frames = tuple(extra_frames)
         self._stop.set()
         self._thread.join(timeout=2.0)
         if self._thread.is_alive():
@@ -64,6 +67,10 @@ class SerialTransport:
                         self._write(port, frame)
                         if self.on_sent is not None:
                             self.on_sent(frame, time.monotonic())
+                        for extra in self.get_extra(time.monotonic()) if self.get_extra else ():
+                            self._write(port, extra)
+                            if self.on_sent is not None:
+                                self.on_sent(extra, time.monotonic())
                         next_send += self.period
                         # Keep cadence without a catch-up burst after an overrun.
                         completed = time.monotonic()
@@ -91,6 +98,8 @@ class SerialTransport:
                     if opened:
                         try:
                             self._write(port, encode_chassis(0.0, 0.0, 0.0, 0))
+                            for frame in self._shutdown_frames:
+                                self._write(port, frame)
                         except (serial.SerialException, OSError):
                             pass
                     try:

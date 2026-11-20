@@ -16,10 +16,12 @@ setup(
     zip_safe=True,
     maintainer='AGV Team',
     maintainer_email='team@example.com',
-    description='USB camera QR scanning and numbered ring geometry tools',
+    description='USB camera QR scanning, numbered ring and material recognition tools',
     license='Apache-2.0',
     entry_points={'console_scripts': [
         'qr_node = agv_perception.qr_node:main',
         'ring_debug_node = agv_perception.ring_debug_node:main',
+        'material_debug_node = agv_perception.material_debug_node:main',
+        'coarse_node = agv_perception.coarse_node:main',
     ]},
 )

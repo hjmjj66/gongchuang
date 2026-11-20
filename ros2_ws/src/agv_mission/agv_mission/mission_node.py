@@ -1,5 +1,7 @@
 """Competition coordinator and sole publisher of the final base velocity topic."""
 
+from agv_planning.link_recovery import communication_lost
+
 import math
 import time
 import uuid
@@ -48,6 +50,8 @@ class MissionNode(Node):
         if type(self.parking_offset_mm) is not int or not 0 < self.parking_offset_mm <= 4294967295:
             raise ValueError('parking_offset_mm must be a positive uint32 integer in mm')
         self.screen_controlled = self._param('screen_controlled', False)
+        self.use_lidar = self._param('use_lidar', True)
+        self.merge_exit_navigation = self._param('merge_exit_navigation', True)
         self._screen_start_at = None
         self.response_timeout = float(self._param('response_timeout_s', 5.0))
         self.init_timeout = float(self._param('initialization_timeout_s', 15.0))
@@ -60,7 +64,8 @@ class MissionNode(Node):
         if not all(math.isfinite(v) and v > 0 for v in (self.response_timeout, self.init_timeout, self.runtime_max_age, rate)):
             raise ValueError('timeouts and publish rate must be finite and positive')
         self.expected_source = {}
-        for key in ('route', 'lidar', 'work'):
+        self.required_executors = ('route', 'work', 'lidar') if self.use_lidar else ('route', 'work')
+        for key in self.required_executors:
             default = 'REAL' if self.mode == 'competition' else 'MOCK'
             source = self._param(f'{key}_source', default)
             if source not in ('REAL', 'MOCK') or (self.mode != 'integration' and source != default):
@@ -86,7 +91,7 @@ class MissionNode(Node):
             raise ValueError('board_status_timeout_s must be finite and positive')
         self.ctx = MissionContext(home_node=self.home,
                                   state='WAIT_SETUP' if self.screen_controlled else 'INITIALIZING')
-        self.task_clients = Clients(self)
+        self.task_clients = Clients(self, use_lidar=self.use_lidar)
         self.runtime = {}
         self.sessions = {}
         self.pending = []
@@ -123,6 +128,23 @@ class MissionNode(Node):
                                  durability=DurabilityPolicy.VOLATILE)
         self.control_pub = self.create_publisher(ControlCommand, control_topic, control_qos)
         self.control_sub = self.create_subscription(RouteControl, route_topic, self._on_route_control, control_qos)
+        coarse_topic = self._param('coarse_control_topic', '/vision/coarse/control')
+        self.coarse_control_sub = self.create_subscription(
+            RouteControl, coarse_topic, self._on_coarse_control, control_qos)
+        if self.coarse_control_sub.topic_name in (self.control_pub.topic_name, self.control_sub.topic_name):
+            raise ValueError('Coarse, route and final control topics must differ')
+        self.storage_control_sub = self.create_subscription(
+            RouteControl, self._param('storage_control_topic', '/vision/storage/control'),
+            self._on_storage_control, control_qos)
+        if self.storage_control_sub.topic_name in (self.control_pub.topic_name, self.control_sub.topic_name,
+                                                   self.coarse_control_sub.topic_name):
+            raise ValueError('Storage, coarse, route and final control topics must differ')
+        self.raw_control_sub = self.create_subscription(
+            RouteControl, self._param('raw_control_topic', '/vision/raw/control'),
+            self._on_raw_control, control_qos)
+        if self.raw_control_sub.topic_name in (self.control_pub.topic_name, self.control_sub.topic_name,
+                                               self.coarse_control_sub.topic_name, self.storage_control_sub.topic_name):
+            raise ValueError('Raw, storage, coarse, route and final control topics must differ')
         if (self.control_pub.topic_name == self.control_sub.topic_name
                 or self.control_sub.topic_name == '/C/controll'):
             raise ValueError('Route feedback and final base control must use different topics')
@@ -137,6 +159,8 @@ class MissionNode(Node):
         self.control_timer = self.create_timer(1.0 / control_rate, self._maintain_control)
         self._stop_control()
         self._publish()
+        if not self.use_lidar:
+            self.get_logger().warning('use_lidar=false：不连接雷达，不执行开局扫描；仅使用人工禁行地图')
         if self.screen_controlled:
             self.get_logger().info('WAIT_SETUP：等待屏幕确认禁行路径和起终点')
 
@@ -150,10 +174,11 @@ class MissionNode(Node):
             return
         binding = (message.odom_session_id, message.motion_epoch)
         changed = self._board_binding is not None and self._board_binding != binding
+        self._board_message = message
         self._board_binding = binding
         self._board_received = time.monotonic()-age
         self._board_ok = bool(message.motion_allowed and message.origin_initialized)
-        if self.ctx.state in ('READY', 'RUNNING') and (changed or not self._board_ok):
+        if self.ctx.state in ('READY', 'RUNNING') and (changed or (not self._board_ok and not communication_lost(message))):
             self.ctx.position_known = False
             self._fault('C板控制权/坐标变化或反馈异常，旧任务终止；重新摆车并初始化')
 
@@ -168,39 +193,62 @@ class MissionNode(Node):
         self.control_pub.publish(ControlCommand())
 
     def _on_route_control(self, feedback):
+        self._on_executor_control(feedback, 'route')
+
+    def _on_coarse_control(self, feedback):
+        if self.ctx.stage in (Stage.COARSE_BATCH_1, Stage.COARSE_BATCH_2):
+            self._on_executor_control(feedback, 'work')
+
+    def _on_raw_control(self, feedback):
+        if self.ctx.stage in (Stage.RAW_BATCH_1, Stage.RAW_BATCH_2):
+            self._on_executor_control(feedback, 'work')
+
+    def _on_storage_control(self, feedback):
+        if self.ctx.stage in (Stage.STORAGE_PLACE_1, Stage.STORAGE_STACK_2):
+            self._on_executor_control(feedback, 'work')
+
+    def _on_executor_control(self, feedback, executor):
         c, task = self.ctx, self.ctx.active
         if (c.state != 'RUNNING' or not c.matches(feedback.run_id, feedback.request_id)
-                or task.kind != 'route' or task.terminal is not None):
+                or task.executor != executor or task.terminal is not None
+                or (executor == 'work' and c.stage not in (Stage.RAW_BATCH_1, Stage.RAW_BATCH_2, Stage.COARSE_BATCH_1, Stage.COARSE_BATCH_2,
+                                                          Stage.STORAGE_PLACE_1, Stage.STORAGE_STACK_2))):
             return
-        if (feedback.source != self.expected_source['route']
-                or feedback.executor_session_id != self.sessions.get('route')):
-            self._fault('路线速度反馈来源或执行进程身份冲突')
+        if (feedback.source != self.expected_source[executor]
+                or feedback.executor_session_id != self.sessions.get(executor)):
+            self._fault('运动速度反馈来源或执行进程身份冲突')
             return
         if feedback.sequence <= self._route_control_sequence:
             return
         if not self._route_control_fresh(feedback):
             return  # Queued/stale messages cannot renew the receive watchdog.
         command = feedback.command
+        if communication_lost(getattr(self, '_board_message', None)):
+            self._route_control_sequence = feedback.sequence
+            self._route_control_received = time.monotonic()
+            self.control_pub.publish(ControlCommand())
+            return
         if self._real_chassis and (not self._chassis_ready() or
                 (command.odom_session_id, command.motion_epoch) != self._board_binding):
-            self._fault('路线速度绑定的坐标/控制许可已过期')
+            self._fault('运动速度绑定的坐标/控制许可已过期')
             return
         velocities = (command.vx_mps, command.vy_mps, command.omega_deg_s)
         if not all(math.isfinite(v) for v in velocities):
-            self._fault('路线速度包含无效数值')
+            self._fault('运动速度包含无效数值')
             return
         if feedback.state not in ('EXECUTING', 'COMPLETED', 'ABORTED'):
-            self._fault('未知路线控制状态')
+            self._fault('未知运动控制状态')
             return
         if feedback.state != 'EXECUTING' and any(v != 0.0 for v in velocities):
-            self._fault('路线终态包含非零速度')
+            self._fault('运动终态包含非零速度')
             return
         self._route_control_sequence = feedback.sequence
         if feedback.state != 'EXECUTING':
-            task.terminal = feedback.state
+            if executor == 'route':
+                task.terminal = feedback.state
             self._stop_control()
             if feedback.state == 'ABORTED':
-                self._fault('路线执行中止：' + feedback.reason)
+                self._fault('运动执行中止：' + feedback.reason)
             return
         self._route_control = feedback
         self._route_control_received = time.monotonic()
@@ -220,15 +268,21 @@ class MissionNode(Node):
 
     def _maintain_control(self):
         c, task = self.ctx, self.ctx.active
-        if (c.state != 'RUNNING' or not task or task.kind != 'route' or task.terminal is not None):
+        controlled = task and (task.kind == 'route' or
+                               (task.kind == 'work' and c.stage in (Stage.RAW_BATCH_1, Stage.RAW_BATCH_2, Stage.COARSE_BATCH_1, Stage.COARSE_BATCH_2,
+                                                                   Stage.STORAGE_PLACE_1, Stage.STORAGE_STACK_2)))
+        if c.state != 'RUNNING' or not controlled or task.terminal is not None:
             self._stop_control()
             return
         if not task.accepted:
             self.control_pub.publish(ControlCommand())
             return
         baseline = self._route_control_received or self._route_control_wait_started
+        if communication_lost(getattr(self, '_board_message', None)):
+            self.control_pub.publish(ControlCommand())
+            return
         if baseline is not None and time.monotonic() - baseline > self.control_timeout:
-            self._fault('路线速度反馈超时，停止导航')
+            self._fault('运动速度反馈超时，停止执行')
         # Fresh samples are forwarded by the subscription, without extending a
         # nonzero command's life by repeatedly publishing a cached velocity.
 
@@ -275,7 +329,8 @@ class MissionNode(Node):
                     self._track(tag, client.call_async(GetExecutorRuntime.Request()),
                                 lambda response, key=key, issued_at=issued_at:
                                 self._runtime_result(key, response.runtime, issued_at))
-        if self.ctx.state in ('READY', 'RUNNING') and not self._chassis_ready():
+        if (self.ctx.state in ('READY', 'RUNNING') and not self._chassis_ready()
+                and not communication_lost(getattr(self, '_board_message', None))):
             self._fault('C板状态超时，停止旧任务')
         state = self.ctx.state
         if state in ('INITIALIZING', 'RESETTING'):
@@ -283,6 +338,9 @@ class MissionNode(Node):
         elif state in ('PAUSING', 'FAULT'):
             self._settle_stop()
         elif state == 'RUNNING':
+            if communication_lost(getattr(self, '_board_message', None)):
+                self.control_pub.publish(ControlCommand())
+                return
             if not self._snapshots_ready():
                 self._fault('执行端运行状态过期，停止推进')
                 return
@@ -326,7 +384,8 @@ class MissionNode(Node):
             self.ctx.current_heading = runtime.current_heading
 
     def _snapshots_ready(self):
-        return len(self.runtime) == 3 and all(time.monotonic() - stamp < self.runtime_max_age for _, stamp in self.runtime.values())
+        return (set(self.runtime) == set(self.required_executors) and
+                all(time.monotonic() - stamp < self.runtime_max_age for _, stamp in self.runtime.values()))
 
     def _initialize(self):
         if time.monotonic() - self.init_started > self.init_timeout:
@@ -353,7 +412,7 @@ class MissionNode(Node):
             self._track(tag, self.task_clients.reset[key].call_async(request),
                         lambda response, key=key: self._reset_result(key, response), mutation=True)
             return
-        if len(self.reset_done) == 3:
+        if self.reset_done == set(self.required_executors):
             if not self._chassis_ready():
                 raise ValueError('C板尚未就绪')
             route = self.runtime['route'][0]
@@ -385,7 +444,7 @@ class MissionNode(Node):
     def _start(self, request, response):
         try:
             if self._screen_start_at is not None and time.monotonic() < self._screen_start_at:
-                raise ValueError('屏幕 OK 后的 2 秒启动等待尚未结束')
+                raise ValueError('屏幕 START 后的 2 秒启动等待尚未结束')
             if self.ctx.state != 'READY' or not self.task_clients.ready() or not self._snapshots_ready():
                 raise ValueError('需要READY且所有执行端在线；暂停/故障后先复位')
             for key, (state, _) in self.runtime.items():
@@ -399,7 +458,8 @@ class MissionNode(Node):
             self._screen_start_at = None
             self._enter_pending = True
             response.success, response.message = True, '开始已接受，先斜移离开启停区'
-            self.get_logger().info('比赛开始：先斜移离开启停区，再雷达扫描、前往二维码区')
+            scan = '雷达扫描后' if self.use_lidar else '确认人工禁行地图后'
+            self.get_logger().info(f'比赛开始：先斜移离开启停区，再{scan}前往二维码区')
         except ValueError as exc:
             response.message = str(exc)
         self._publish()
@@ -540,10 +600,22 @@ class MissionNode(Node):
                 c.substate = 'WAIT_QR'
                 self._accept_pending_qr()
             elif c.stage == Stage.STARTUP_SCAN:
-                task = ActiveTask(str(uuid.uuid4()), 'scan', 'lidar')
-                c.active = task
-                goal = ScanRoads.Goal(run_id=c.run_id, task_id=task.task_id)
-                self._send_action(self.task_clients.scan, goal, task)
+                if self.use_lidar:
+                    task = ActiveTask(str(uuid.uuid4()), 'scan', 'lidar')
+                    c.active = task
+                    goal = ScanRoads.Goal(run_id=c.run_id, task_id=task.task_id)
+                    self._send_action(self.task_clients.scan, goal, task)
+                else:
+                    self._stop_control()
+                    c.blocked_edges = tuple(sorted(c.manual_blocked_edges))
+                    c.map_revision = 1
+                    c.substate = 'WAIT_MAP'
+                    self._map_started_at = time.monotonic()
+                    self.next_map = 0.0
+                    self.get_logger().info(
+                        f'SCAN_SKIPPED use_lidar=false manual_routes={c.manual_forbidden_routes} '
+                        f'blocked={c.blocked_edges}')
+                    self._commit_map()
             elif int(c.stage) in ROUTES or c.stage in (Stage.EXIT_START_AREA, Stage.ENTER_FINISH_AREA):
                 maneuver = ''
                 if c.stage in (Stage.EXIT_START_AREA, Stage.ENTER_FINISH_AREA):
@@ -572,13 +644,20 @@ class MissionNode(Node):
                             lambda response: self._plan_result(task, response), mutation=True)
             else:
                 area, operation, batch, colors, positions = batch_spec(c.stage, c.code, c.first_layer)
+                self._stop_control()
+                self._route_control_sequence = 0
+                self._route_control_wait_started = None
                 task = ActiveTask(str(uuid.uuid4()), 'work', 'work',
-                                  spec=expected_steps(operation, colors, positions), batch=batch)
+                                  spec=expected_steps(operation, colors, positions), batch=batch,
+                                  defer_reference_return=(self.merge_exit_navigation and
+                                      self.expected_source['route'] == 'REAL' and
+                                      operation in ('RAW_PICK', 'COARSE_PROCESS', 'STORAGE_PLACE')))
                 c.active = task
                 goal = RunWorkBatch.Goal(
                     run_id=c.run_id, task_id=task.task_id, task_revision=1,
                     stage=int(c.stage), batch=batch, operation=operation,
                     colors=list(colors), positions=list(positions), enable_motion=True,
+                    defer_reference_return=task.defer_reference_return,
                     first_layer=[FirstLayerRecord(color=color, position=position)
                                  for color, position in sorted(c.first_layer.items())] if operation == 'STORAGE_STACK' else [])
                 self._send_action(self.task_clients.work[area], goal, task)
@@ -597,6 +676,11 @@ class MissionNode(Node):
         if not handle.accepted:
             raise ValueError('执行端拒绝任务')
         task.accepted, task.handle = True, handle
+        if task.kind == 'work' and self.ctx.stage in (Stage.RAW_BATCH_1, Stage.RAW_BATCH_2, Stage.COARSE_BATCH_1, Stage.COARSE_BATCH_2,
+                                                     Stage.STORAGE_PLACE_1, Stage.STORAGE_STACK_2):
+            self._route_control_wait_started = time.monotonic()
+            if self._route_control is not None and self._route_control_fresh(self._route_control):
+                self.control_pub.publish(self._route_control.command)
         # Results may take arbitrarily long; executor heartbeat/runtime checks provide liveness.
         self._track('result', handle.get_result_async(), lambda response: self._action_result(task, response),
                     timeout=False, mutation=True)
@@ -650,7 +734,7 @@ class MissionNode(Node):
             self._commit_map()
         else:
             ids = {record.step_id for record in r.confirmed_steps}
-            if ids != {row[0] for row in task.spec} or not all((r.all_items_completed, r.reference_restored,
+            if ids != {row[0] for row in task.spec} or not all((r.all_items_completed, self._reference_accepted(r),
                                                              r.motion_released, r.arm_idle)):
                 raise ValueError('整批动作、离站参考或控制权尚未完整确认')
             if c.stage == Stage.STORAGE_PLACE_1:
@@ -660,6 +744,24 @@ class MissionNode(Node):
                 c.first_layer = mapping
             c.arm_pending = False
             self._finish()
+
+    def _reference_accepted(self, result):
+        deferred = self.ctx.active.defer_reference_return
+        reference_ok = (result.reference_return_deferred and not result.reference_restored if deferred else
+                        result.reference_restored and not result.reference_return_deferred)
+        if result.reference_return_timed_out:
+            reference_ok = (not deferred and not result.reference_restored and
+                            not result.reference_return_deferred)
+        if self.ctx.stage in (Stage.COARSE_BATCH_1, Stage.COARSE_BATCH_2):
+            return reference_ok and result.final_alignment_outcome in ('ALIGNED', 'TIMEOUT_SKIPPED')
+        if self.ctx.stage in (Stage.RAW_BATCH_1, Stage.RAW_BATCH_2):
+            return reference_ok and not result.reference_return_timed_out and result.final_alignment_outcome == 'NOT_RUN'
+        if self.ctx.stage == Stage.STORAGE_PLACE_1:
+            return reference_ok and result.final_alignment_outcome == 'NOT_RUN'
+        if self.ctx.stage in (Stage.STORAGE_STACK_2,):
+            return not (result.reference_restored or result.reference_return_deferred or
+                        result.reference_return_timed_out) and result.final_alignment_outcome == 'NOT_RUN'
+        return reference_ok
 
     def _commit_map(self):
         c = self.ctx
@@ -672,7 +774,7 @@ class MissionNode(Node):
         if runtime.run_id == c.run_id and runtime.map_ready and runtime.map_revision == c.map_revision and content == c.blocked_edges:
             self.get_logger().info(f'MAP_COMMITTED revision={c.map_revision} blocked={c.blocked_edges}')
             self._finish()
-        elif c.active and time.monotonic() - self._map_started_at > self.init_timeout:
+        elif time.monotonic() - self._map_started_at > self.init_timeout:
             self._fault('扫描/地图提交超时')
 
     def _plan_result(self, task, response):
@@ -774,6 +876,8 @@ class MissionNode(Node):
             substate=c.substate, active_task_id=c.active.task_id if c.active else '',
             active_task_kind=c.active.kind if c.active else '', batch=WORK.get(c.stage, ('', '', 0))[2],
             confirmed_step_count=len(c.confirmed_steps), quiescent=c.quiescent, arm_pending=c.arm_pending,
+            pick_count=sum(row[0] == 'PICK' for row in c.confirmed_steps.values()),
+            place_count=sum(row[0] in ('PLACE', 'STACK') for row in c.confirmed_steps.values()),
             confirmed_node=c.confirmed_node, position_known=c.position_known,
             current_heading=c.current_heading, map_revision=c.map_revision, reason=c.reason,
             elapsed_s=end - c.started_at if c.started_at else 0.0,

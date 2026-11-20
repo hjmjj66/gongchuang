@@ -1,0 +1,16 @@
+# 上位机通信协议v2.0.md（正文 v0.8）；6 兼用于粗加工与暂存第一层，8 已删除，9..15 保留。
+uint8 STOP_ABORT=0
+uint8 HOME=1
+uint8 INIT=2
+uint8 WORK=3
+uint8 PICK_RAW=4
+uint8 PICK_ROUGH=5
+uint8 PLACE_TEMP_1=6
+uint8 PLACE_TEMP_2=7
+string command_id
+uint8 cmd
+string odom_session_id
+uint64 motion_epoch
+---
+bool accepted
+string reason

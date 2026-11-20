@@ -18,6 +18,7 @@ class ActiveTask:
     goal: int = 0
     batch: int = 0
     terminal_seen_at: float = 0.0
+    defer_reference_return: bool = False
 
 
 @dataclass

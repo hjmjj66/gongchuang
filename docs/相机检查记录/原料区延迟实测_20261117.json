@@ -1,0 +1,103 @@
+{
+  "measured_at": "2026-11-17T19:17:18+08:00",
+  "source": "live X5 camera, coarse_debug.vision.RingVision",
+  "material_config": "/root/工创/ros2_ws/src/agv_perception/config/material.yaml",
+  "method": {
+    "warmup_s": 2,
+    "sample_s": 10,
+    "poll_s": 0.02,
+    "motion_commands": false,
+    "timestamp": "software read completion; excludes exposure/USB before read and actuation after control",
+    "use_jhb_model": false,
+    "camera_size": [
+      1280,
+      720
+    ],
+    "camera_buffer_size": 4
+  },
+  "results": [
+    {
+      "phase": "all_colors",
+      "geometry_target": 0,
+      "samples": 289,
+      "colors": {
+        "3": 174,
+        "1": 134
+      },
+      "observed_result_fps": 28.9,
+      "control_observation_age_ms": {
+        "median": 58.9,
+        "p95": 80.6
+      },
+      "capture_to_result_ms": {
+        "median": 47.2,
+        "p95": 64.7
+      },
+      "result_interval_ms": {
+        "median": 40.4,
+        "p95": 48.8
+      },
+      "model_ms": {
+        "median": 28.8,
+        "p95": 32.3
+      },
+      "geometry_ms": {
+        "median": 3.1,
+        "p95": 4.0
+      },
+      "performance": {
+        "capture_fps": 30.0,
+        "processing_fps": 28.8,
+        "preview_fps": 14.4,
+        "stages_ms": {
+          "yolo": 28.269008999814105,
+          "geometry": 2.9114719995959604,
+          "capture_to_result": 41.4753620002557,
+          "preview": 21.162932999686745
+        }
+      }
+    },
+    {
+      "phase": "selected_color",
+      "geometry_target": 2,
+      "samples": 293,
+      "colors": {
+        "1": 31,
+        "2": 216,
+        "3": 76
+      },
+      "observed_result_fps": 29.2,
+      "control_observation_age_ms": {
+        "median": 56.9,
+        "p95": 80.4
+      },
+      "capture_to_result_ms": {
+        "median": 46.8,
+        "p95": 62.7
+      },
+      "result_interval_ms": {
+        "median": 40.4,
+        "p95": 48.6
+      },
+      "model_ms": {
+        "median": 28.5,
+        "p95": 32.1
+      },
+      "geometry_ms": {
+        "median": 2.2,
+        "p95": 3.4
+      },
+      "performance": {
+        "capture_fps": 30.0,
+        "processing_fps": 29.5,
+        "preview_fps": 13.3,
+        "stages_ms": {
+          "yolo": 30.18126699998902,
+          "geometry": 0.07387499999822467,
+          "capture_to_result": 62.0175429999108,
+          "preview": 19.232174000080704
+        }
+      }
+    }
+  ]
+}

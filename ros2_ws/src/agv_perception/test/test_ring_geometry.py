@@ -21,7 +21,7 @@ def ring_image(center=(190, 150), radii=(32, 53, 73), digit='1'):
 
 
 class GeometryTests(unittest.TestCase):
-    def test_real_hough_single_circle_with_center_digit(self):
+    def test_real_single_circle_with_center_digit(self):
         frame = ring_image(center=(190, 150), radii=(73,), digit='2')
         geometry = RingGeometry()
         result = geometry.detect(frame[60:240, 100:280], (10, 10, 170, 170))
@@ -30,7 +30,7 @@ class GeometryTests(unittest.TestCase):
         self.assertGreaterEqual(result.support['edge_ratio'], geometry.config.min_edge_support)
         self.assertTrue(result.selected)
 
-    def test_real_hough_concentric_rings_both_preprocessing_modes(self):
+    def test_real_concentric_rings_both_preprocessing_modes(self):
         frame = ring_image()
         for mode in ('gray', 'binary_morphology'):
             with self.subTest(mode=mode):
@@ -39,6 +39,57 @@ class GeometryTests(unittest.TestCase):
                 self.assertEqual(result.reason, 'OK')
                 self.assertLess(math.dist(result.center_px, (93, 93)), 4.0)
                 self.assertGreaterEqual(len(result.radii_px), 1)
+
+    def test_hough_remains_available_for_offline_comparison(self):
+        result = RingGeometry(replace(GeometryConfig(), method='hough')).detect(
+            ring_image()[57:243, 97:283], (13, 13, 173, 173))
+        self.assertEqual(result.reason, 'OK')
+        self.assertLess(math.dist(result.center_px, (93, 93)), 4)
+
+    def test_dense_dashed_rings_use_continuous_edges_without_candidate_explosion(self):
+        frame = np.full((360, 360, 3), 240, np.uint8)
+        for radius in range(65, 151, 12):
+            for start in range(0, 360, 18):
+                cv2.ellipse(frame, (180, 176), (radius, radius), 0,
+                            start, start + 12, (0, 0, 0), 2, cv2.LINE_AA)
+        for radius in (80, 115, 140):
+            cv2.circle(frame, (180, 176), radius, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, '2', (160, 190), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+        result = RingGeometry().detect(frame, (25, 21, 335, 331))
+        self.assertEqual(result.reason, 'OK')
+        self.assertLess(math.dist(result.center_px, (180, 176)), 2)
+        self.assertLess(len(result.candidates), 30)
+
+    def test_rotated_ellipses_keep_center_and_reject_local_arc(self):
+        for angle in (0, 35, 85):
+            with self.subTest(angle=angle):
+                frame = np.full((320, 320, 3), 240, np.uint8)
+                cv2.ellipse(frame, (151, 158), (110, 82), angle, 0, 360,
+                            (0, 0, 0), 3, cv2.LINE_AA)
+                result = RingGeometry().detect(frame, (30, 30, 280, 280))
+                self.assertEqual(result.reason, 'OK')
+                self.assertLess(math.dist(result.center_px, (151, 158)), 2)
+                self.assertIsNotNone(result.selected[0].ellipse_axes)
+        frame[:] = 240
+        cv2.ellipse(frame, (151, 158), (110, 82), 35, 0, 100,
+                    (0, 0, 0), 3, cv2.LINE_AA)
+        self.assertIsNone(RingGeometry().detect(frame, (30, 30, 280, 280)).center_px)
+
+    def test_reduced_search_restores_odd_sized_original_coordinates(self):
+        frame = np.full((417, 593, 3), 240, np.uint8)
+        for axes in ((158, 119), (133, 100)):
+            cv2.ellipse(frame, (294, 207), axes, 27, 0, 360,
+                        (0, 0, 0), 3, cv2.LINE_AA)
+        centers = []
+        for limit in (0, 192):
+            geometry = RingGeometry(replace(GeometryConfig(), contour_max_side_px=limit))
+            result = geometry.detect(frame, (110, 35, 480, 380))
+            self.assertEqual(result.reason, 'OK')
+            self.assertLess(math.dist(result.center_px, (294, 207)), 1.5)
+            self.assertEqual(result.edges.shape, frame.shape[:2])
+            self.assertTrue(all(c.radius > 100 for c in result.selected))
+            centers.append(result.center_px)
+        self.assertLess(math.dist(*centers), 1)
 
     def test_white_image_and_digit_alone_have_no_trusted_circle(self):
         geometry = RingGeometry()
@@ -59,7 +110,7 @@ class GeometryTests(unittest.TestCase):
 
     def test_real_off_center_circle_rejected_by_center_constraint(self):
         frame = np.full((200, 200, 3), 240, np.uint8)
-        cv2.circle(frame, (40, 100), 26, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.circle(frame, (40, 100), 30, (0, 0, 0), 3, cv2.LINE_AA)
         result = RingGeometry().detect(frame, (0, 0, 200, 200))
         self.assertIsNone(result.center_px)
         self.assertTrue(any(c.reason == 'CENTER_OUTSIDE_RANGE' for c in result.candidates))
@@ -118,7 +169,11 @@ class GeometryTests(unittest.TestCase):
     def test_invalid_geometry_config_rejected_at_entry(self):
         for changes in ({'blur_kernel': 4}, {'min_edge_support': 0.0},
                         {'min_radius_ratio': 0.7}, {'angle_sectors': 0},
-                        {'open_iterations': -1}, {'hough_param2': float('nan')}):
+                        {'open_iterations': -1}, {'hough_param2': float('nan')},
+                        {'method': 'unknown'}, {'min_ellipse_axis_ratio': 0},
+                        {'max_contour_fit_error_px': 0}, {'min_contour_area_ratio': 1.1},
+                        {'contour_adaptive_block_size': 2}, {'contour_adaptive_c': -1},
+                        {'contour_max_side_px': -1}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 replace(GeometryConfig(), **changes)
 

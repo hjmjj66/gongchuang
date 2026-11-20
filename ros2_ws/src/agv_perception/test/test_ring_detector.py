@@ -1,6 +1,7 @@
 """Frame/box contracts and real geometry without any fabricated model runtime."""
 
 from dataclasses import fields, replace
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import tempfile
@@ -16,19 +17,49 @@ from agv_perception.ring_model import ModelDetection, RingModelError, load_ring_
 
 
 class DetectorTests(unittest.TestCase):
+    def test_only_target_runs_geometry_in_serial_and_parallel_paths(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        frame = np.full((320, 600, 3), 240, np.uint8)
+        boxes = []
+        for ring, x in ((1, 100), (2, 300), (3, 500)):
+            cv2.circle(frame, (x, 160), 55, (0, 0, 0), 3, cv2.LINE_AA)
+            boxes.append(ModelDetection(str(ring), .9, (x-70, 90, x+70, 230)))
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            for executor in (None, pool):
+                detector = RingDetector(roi_executor=executor)
+                with patch.object(detector.geometry, 'detect', wraps=detector.geometry.detect) as locate:
+                    result = detector.detect_boxes(frame, boxes, geometry_target=2)
+                    self.assertEqual(locate.call_count, 1)
+                for item in result.observations:
+                    self.assertTrue(item.valid)
+                    self.assertEqual(item.center_source, 'circle' if item.ring_id == 2 else 'bbox')
+                    if item.ring_id != 2:
+                        self.assertEqual(item.geometry_reason, 'NOT_TARGET')
+                        self.assertIsNone(item.circle_center_px)
+                self.assertEqual(set(result.debug), {2})
+                with patch.object(detector.geometry, 'detect', wraps=detector.geometry.detect) as locate:
+                    detector.detect_boxes(frame, boxes[:1], geometry_target=2)
+                    self.assertEqual(locate.call_count, 0)
+                    detector.detect_boxes(frame, boxes)
+                    self.assertEqual(locate.call_count, 3)
+        for invalid in (-1, 4, True, None):
+            with self.assertRaises(ValueError):
+                RingDetector().detect_boxes(frame, boxes, geometry_target=invalid)
+
     def setUp(self):
         self.frame = np.full((400, 600, 3), 240, np.uint8)
         self.detector = RingDetector()
 
-    def test_highest_per_id_and_threshold_inclusive(self):
+    def test_highest_per_id_and_strict_threshold(self):
         boxes = [
             ModelDetection('1', 0.6, (20, 20, 100, 100)),
             ModelDetection('1', 0.9, (30, 30, 110, 110)),
-            ModelDetection('2', 0.5, (120, 20, 200, 100)),
-            ModelDetection('3', 0.499, (220, 20, 300, 100)),
+            ModelDetection('2', 0.750001, (120, 20, 200, 100)),
+            ModelDetection('3', 0.75, (220, 20, 300, 100)),
             ModelDetection('other', 0.99, (320, 20, 400, 100)),
         ]
-        selected = select_best_boxes(boxes, 0.5)
+        selected = select_best_boxes(boxes, 0.75)
         self.assertEqual(set(selected), {1, 2})
         self.assertEqual(selected[1], boxes[1])
         result = self.detector.detect_boxes(self.frame, boxes, 7, 12.5)
@@ -39,6 +70,11 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(result.status, 'PARTIAL')
         self.assertEqual(result.frame_seq, 7)
         self.assertEqual(result.stamp, 12.5)
+
+    def test_threshold_applies_independently_to_all_three_ids(self):
+        boxes = [ModelDetection(str(i), confidence, (i * 100, 20, i * 100 + 80, 100))
+                 for i, confidence in ((1, 0.749999), (2, 0.75), (3, 0.750001))]
+        self.assertEqual(set(select_best_boxes(boxes, 0.75)), {3})
 
     def test_equal_confidence_keeps_first(self):
         first = ModelDetection('1', 0.9, (20, 20, 100, 100))
@@ -71,6 +107,8 @@ class DetectorTests(unittest.TestCase):
         self.assertAlmostEqual(observation.center_px[0], 250, delta=3)
         self.assertAlmostEqual(observation.center_px[1], 180, delta=3)
         self.assertEqual(observation.identity_source, 'yolo')
+        self.assertEqual(observation.bbox_center_px, (250, 180))
+        self.assertEqual(observation.circle_center_px, observation.center_px)
         np.testing.assert_array_equal(self.frame, original)
         self.assertNotIn('debug', result.to_dict())
         json.dumps(result.to_dict(), allow_nan=False)
@@ -84,6 +122,18 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(observation.status, 'BBOX_ONLY')
         self.assertEqual(observation.identity_source, 'manual')
         self.assertIsNone(observation.yolo_confidence)
+
+    def test_parallel_rois_match_serial_geometry_and_keep_id_order(self):
+        boxes = []
+        for ring_id, x in ((3, 480), (1, 100), (2, 290)):
+            cv2.circle(self.frame, (x, 200), 60, (0, 0, 0), 3, cv2.LINE_AA)
+            boxes.append(ModelDetection(str(ring_id), 0.9, (x - 80, 120, x + 80, 280)))
+        serial = self.detector.detect_boxes(self.frame, boxes)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            parallel = RingDetector(roi_executor=pool).detect_boxes(self.frame, boxes)
+        self.assertEqual(parallel.observations, serial.observations)
+        self.assertTrue(all(o.center_source == 'circle' for o in parallel.observations))
+        self.assertEqual([o.ring_id for o in parallel.observations], [1, 2, 3])
 
     def test_original_frame_edge_disables_fallback(self):
         result = self.detector.detect_roi(self.frame, (0, 20, 100, 120))
@@ -109,6 +159,8 @@ class DetectorTests(unittest.TestCase):
         observation = self.detector.detect_roi(self.frame, (20, 20, 25, 25)).observations[0]
         self.assertEqual(observation.geometry_reason, 'ROI_TOO_SMALL')
         self.assertEqual(observation.center_source, 'bbox')
+        self.assertIsNone(observation.circle_center_px)
+        self.assertEqual(observation.bbox_center_px, observation.center_px)
 
     def test_no_boxes_cannot_reuse_previous_coordinates(self):
         self.detector.detect_boxes(self.frame, [ModelDetection('1', 0.8, (20, 20, 100, 100))])
@@ -147,8 +199,9 @@ class DetectorTests(unittest.TestCase):
     def test_yaml_defaults_match_the_actual_config_classes(self):
         config_path = Path(__file__).resolve().parents[1] / 'config' / 'ring.yaml'
         config = yaml.safe_load(config_path.read_text())['ring_debug_node']['ros__parameters']
-        self.assertEqual(config['model_path'], '')
-        self.assertEqual(config['model_format'], '')
+        self.assertEqual(config['model_format'], 'rdk_yolov8_bin')
+        self.assertTrue(config['model_path'].endswith('.bin'))
+        self.assertTrue(config['model_runtime_path'].endswith('rdk_model_zoo'))
         for cls, prefix in ((DetectorConfig, ''), (GeometryConfig, 'geometry.')):
             for item in fields(cls):
                 self.assertEqual(config[prefix + item.name], getattr(cls(), item.name))

@@ -9,6 +9,11 @@ uint8[] colors
 uint8[] positions
 agv_interfaces/FirstLayerRecord[] first_layer
 bool enable_motion
+# RAW_PICK / COARSE_PROCESS / STORAGE_PLACE: stow and stop in place, then let navigation
+# absorb the work offset using its preserved fixed-frame target. Default false.
+bool defer_reference_return
+# Deprecated compatibility field; ignored.
+float64 camera_car_offset
 ---
 string run_id
 string task_id
@@ -19,12 +24,23 @@ string source
 string outcome
 agv_interfaces/WorkStepRecord[] confirmed_steps
 bool all_items_completed
+# True only when stowed, returned to recorded P0 and stopped.
+# Coarse final visual alignment is reported independently, including TIMEOUT_SKIPPED.
+# STORAGE_STACK: false, chassis fixed; final_alignment_outcome=NOT_RUN.
 bool reference_restored
+# Requested deferred return completed: stowed and stopped in place; no P0 return executed.
+# Mutually exclusive with reference_restored; false on failure/cancel.
+bool reference_return_deferred
+# P0 PID timed out; stowed and stopped in place, continue without claiming P0 restored.
+# Mutually exclusive with reference_restored/reference_return_deferred.
+bool reference_return_timed_out
 bool motion_released
 bool arm_idle
 bool travel_ready
 agv_interfaces/FirstLayerRecord[] first_layer_records
 string reason
+# Coarse final visual alignment: ALIGNED / TIMEOUT_SKIPPED / NOT_RUN.
+string final_alignment_outcome
 ---
 string run_id
 string task_id

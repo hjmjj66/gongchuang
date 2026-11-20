@@ -1,0 +1,9 @@
+string command_id
+# Signed motor RPM; positive is upward.
+float64 ud_rpm
+float64 duration_s
+string odom_session_id
+uint64 motion_epoch
+---
+bool accepted
+string reason

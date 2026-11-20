@@ -9,7 +9,7 @@ if [[ ! -f "$PROJECT_DIR/ros2_ws/install/setup.bash" ]]; then
 fi
 source "$PROJECT_DIR/ros2_ws/install/setup.bash"
 export PYTHONPATH="$TOOL_DIR${PYTHONPATH:+:$PYTHONPATH}"
-/usr/bin/python3 -c 'from agv_interfaces.msg import RouteExecutionProgress; from agv_screen.protocol import ScreenMessageParser' || {
+/usr/bin/python3 -c 'from agv_interfaces.msg import RouteExecutionProgress; from agv_screen.protocol import ScreenMessageParser; from agv_planning.motion_config import MOTION_PARAMETERS; assert hasattr(RouteExecutionProgress(), "target_valid")' || {
   echo '接口或屏幕组件未更新，请先重新构建 agv_interfaces、agv_planning、agv_cboard 和 agv_screen。' >&2
   exit 1
 }

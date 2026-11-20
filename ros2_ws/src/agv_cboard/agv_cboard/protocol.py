@@ -7,13 +7,18 @@ import time
 
 SOF = b'\xAA\x55'
 CHASSIS_CMD = 0x01
+ARM_CMD = 0x02
+ARM_JOG = 0x03
 ODOM = 0x81
 STATUS = 0x82
 ACK = 0x83
 
 CHASSIS_STRUCT = struct.Struct('<fffB3x')
+ARM_STRUCT = struct.Struct('<B3x')
+JOG_STRUCT = struct.Struct('<fffB3x')
+ACK_STRUCT = struct.Struct('<BBH')
 ODOM_STRUCT = struct.Struct('<IffffffB3x')
-STATUS_STRUCT = struct.Struct('<IBBBBfffB3x')
+STATUS_STRUCT = struct.Struct('<IBBBBiifBB2x')
 
 
 def crc16(data: bytes, crc: int = 0xFFFF) -> int:
@@ -39,6 +44,19 @@ def encode_chassis(vx: float, vy: float, wz: float, mode: int) -> bytes:
     if mode not in (0, 1):
         raise ValueError('mode must be 0 or 1')
     return encode_frame(CHASSIS_CMD, CHASSIS_STRUCT.pack(*values, mode))
+
+
+def encode_arm(cmd):
+    if type(cmd) is not int or not 0 <= cmd <= 7:
+        raise ValueError('arm cmd must be an integer 0..7 (v0.8; 8 deleted; 9..15 reserved)')
+    return encode_frame(ARM_CMD, ARM_STRUCT.pack(cmd))
+
+
+def encode_jog(yaw_wz=0., fb_rpm=0., ud_rpm=0., mode=0):
+    values = (float(yaw_wz), float(fb_rpm), float(ud_rpm))
+    if not all(math.isfinite(v) for v in values) or mode not in (0, 1):
+        raise ValueError('invalid ARM_JOG velocity or mode')
+    return encode_frame(ARM_JOG, JOG_STRUCT.pack(*values, mode))
 
 
 class FrameParser:
@@ -125,6 +143,6 @@ def unpack_status(payload: bytes):
     if len(payload) < STATUS_STRUCT.size:
         raise ValueError(f'STATUS payload too short: {len(payload)}')
     values = STATUS_STRUCT.unpack_from(payload)
-    if not all(math.isfinite(value) for value in values[5:8]):
+    if not math.isfinite(values[7]):
         raise ValueError('STATUS contains a non-finite float')
     return values

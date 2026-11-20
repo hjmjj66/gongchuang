@@ -1,56 +1,273 @@
-# 参数在启动时读取；数值是调试起点，需用固定主相机实拍标定。
+# 圆环识别共用配置：ROS ring_debug_node 与 tools/ring_debug 网页工具读取此文件。
+# 参数在启动时读取，修改后重启相应程序生效；几何数值需按主相机实拍标定。
+# 所有像素坐标均针对实际原图：左上角为 (0,0)，x 向右、y 向下。
+# 含 ratio 的几何参数以“原始 YOLO 框短边”为尺度，ROI 扩展比例除外。
+# YOLO 神经网络在 X5 BPU 上运行；图像预处理、模型后处理和几何找圆使用 CPU。
+# 网页的 --config、--device、--image、--port、--preview-width 为命令行选项，
+# 其中 --device 覆盖 camera_device，--image 替代相机输入；网页端口默认 8084。
+# 网页预览默认 1280 px 原宽以避免额外缩放；--preview-width 960 可减少传输量。
+# 预览编码繁忙时跳过显示帧，不阻塞识别；网页显示 FPS 与处理 FPS 分别统计。
+# 预览尺寸不影响 YOLO 输入、原图几何验证或输出像素坐标。
 ring_debug_node:
   ros__parameters:
-    mode: combined                # combined / geometry_only（仅静态图手动 ROI）
-    model_path: ""                # 等待用户训练后的模型，不下载或借用开源权重
-    model_format: ""              # 部署格式待真实模型到位后接入
-    class_labels: ["1", "2", "3"] # 未来核对模型实际类别顺序
-    confidence_threshold: 0.5
+    # ── 1. 模型与每编号候选筛选 ──────────────────────────────────────────
+    # combined：YOLO 识别编号框，再在各自 ROI 内用几何算法定位圆心。
+    # geometry_only：仅 ROS 静态图片调试；需指定 input_image 和 manual_roi，不加载模型。
+    # 网页工具只支持 combined，不用手动编号冒充模型检测。
+    mode: combined
+
+    # 用户训练并编译的 X5 INT8 BIN；模型初始化时加载一次，后续各帧复用。
+    # 换板或移动部署目录后同步修改下方运行库路径；工具不会自动下载权重。
+    model_path: /root/ring_deploy_v1_20261103/models/ring_yolov8n_bayese_640x640_nv12.bin
+
+    # 当前唯一接入的部署格式，通过 hbm_runtime 调用 X5 BPU。
+    model_format: rdk_yolov8_bin
+
+    # 已部署的 rdk_model_zoo 仓库根目录，包含 samples/vision/ultralytics_yolo/...。
+    # 运行库负责 letterbox、NV12、BPU、DFL 解码、类内 NMS 和原图框坐标反变换。
+    model_runtime_path: /root/ring_deploy_v1_20261103/rdk_model_zoo
+
+    # 按模型内部索引顺序映射到工位编号；必须恰好包含字符串 "1"、"2"、"3"。
+    # 当前索引 0/1/2 的训练类名为 ring_1/ring_2/ring_3，分别对应工位 1/2/3。
+    class_labels: ["1", "2", "3"]
+
+    # 范围 [0,1]。候选必须严格大于此值：0.75 被排除，0.750001 可入选。
+    # 每编号独立取最高分；同分保留模型输出中的第一个，不是全图只留一个框。
+    # 提高可过滤更多低分框，同时可能漏检；此置信度不代表圆心定位精度。
+    confidence_threshold: 0.75
+
+    # 范围 [0,1]，同类别 NMS 的 IoU 门槛，由运行库执行一次。
+    # 降低会更积极地抑制重叠框；提高会保留更多重叠框。
+    # NMS 后仍按上述规则每编号只取最高分，不改变阈值和编号独立筛选规则。
+    nms_threshold: 0.7
+
+    # ── 2. ROI 裁剪与框中心退化 ───────────────────────────────────────────
+    # 非负比例。框左右各扩展“原框宽 × 此比例”，上下各扩展“原框高 × 此比例”。
+    # 例如 100×80 框在 0.08 时左右各加 8 px、上下各加 6.4 px，再取整裁到图内。
+    # 增大有助于容纳框外环边，但会带入背景并增加 CPU 找圆开销。
     roi_padding_ratio: 0.08
+
+    # 整数，至少 3 px；实际扩展并裁剪后的 ROI 宽和高都须达到此值才找圆。
+    # 太小则 geometry_reason=ROI_TOO_SMALL，再按下方退化策略处理。
     minimum_roi_size_px: 20
+
+    # 非负像素容差。原始检测框任一边距原图边界 <= 此值即视为可能截断。
+    # 判断的是原始 YOLO 框；仅扩展 ROI 碰到图边不算截断。
     border_tolerance_px: 1.0
+
+    # true：无可信圆时，完整框允许退回原始框中心，来源 bbox、状态 BBOX_ONLY；
+    #       circle_center_px 仍为空，网页不画视觉圆心。原框触边时禁用此退化。
+    # false：无可信圆直接返回无效观测。可信圆成功时，即使原框触边也仍可使用。
+    # 最高分框找圆失败后不会切换同编号较低分框。
     allow_bbox_fallback: true
 
-    input_image: ""               # 非空则只处理一张图片
-    manual_roi: []                # geometry_only 必填 [x1,y1,x2,y2]，整数原图坐标
-    manual_ring_id: 0              # 0 表示不指定；1/2/3 仅手动提示，非自动识别
-    show_preview: false
-    output_dir: ""                # 非空时保存 JSON 与图片；相机会追加 results.jsonl
-    save_every_n_frames: 0         # 相机抽样保存图片，0 关闭；静态图始终保存
+    # ── 3. ROS 调试输入、桌面预览与落盘（本组不控制网页工具）─────────────────
+    # 空字符串：使用主相机；非空：读取此图片并处理一次。
+    # 网页图片输入应使用 --image /absolute/path/image.jpg，不读取本参数。
+    input_image: ""
 
-    # 设备路径来自历史 C100 检查记录，现场请核对；不使用扫码相机配置。
+    # geometry_only 必填 [x1,y1,x2,y2]，为原图整数坐标，不是 [x,y,宽,高]。
+    # x2 > x1 且 y2 > y1；combined 不接受非空 manual_roi。
+    manual_roi: []
+
+    # 0：不指定编号；1/2/3：仅作为手动 ROI 的编号提示，identity_source=manual。
+    manual_ring_id: 0
+
+    # ROS OpenCV 桌面窗口；需 DISPLAY/WAYLAND_DISPLAY，按 q/Esc 退出。
+    # SSH 无桌面时设 false；不影响网页画面、双色中心或网页帧率显示。
+    show_preview: false
+
+    # 空字符串：不落盘。非空：创建目录保存调试结果。
+    # 静态图保存 result.json、标注图和 ROI 中间图；相机模式追加 results.jsonl。
+    output_dir: ""
+
+    # 非负整数，仅 output_dir 非空时有效。相机每处理 N 帧抽样保存一组调试图。
+    # 0：不保存相机图片，仍可记 JSONL；静态图片模式不受此间隔限制。
+    save_every_n_frames: 0
+
+    # ── 4. 主相机采集、处理频率与结果时效 ─────────────────────────────────
+    # 历史 C100 主相机稳定路径；现场用 ls -l /dev/v4l/by-id/ 核对。
+    # 网页与 ROS 调试会独占此设备，启动前关闭主相机拍照等占用程序。
     camera_device: /dev/v4l/by-id/usb-HJ_USB_2.0_Camera_HJ_USB_2.0_Camera_SN0001-video-index0
+
+    # 请求的采集分辨率，单位 px，均为正整数；实际输出以相机协商结果为准。
+    # 几何检测使用实际原图 ROI，不按网页预览尺寸计算圆心。
     camera_width: 1280
     camera_height: 720
+
+    # 请求的采集帧率，单位帧/秒，须为正数；不保证设备或识别达到此值。
+    # CameraStream 独立持续读帧，只缓存最新帧；网页采集 FPS 按实际序号统计。
     camera_fps: 30.0
+
+    # 请求的 V4L2 缓冲数，正整数；设备可能拒绝此设置。
+    # 缓冲过多可能增加积压延迟，但不能仅凭此值推断端到端延迟。
     camera_buffer_size: 4
+
+    # V4L2 自动曝光优先级：true 允许相机为低光曝光降低采集帧率；
+    # false 请求禁止该动态降帧。是否支持由设备决定，不支持会记录警告。
     camera_dynamic_framerate: false
-    process_rate_hz: 15.0
+
+    # 识别处理频率目标上限，单位 Hz，须为正数；包含 YOLO 与 ROI 几何处理。
+    # 当前为 30 Hz；提高会增加处理负载，实际 FPS 仍受模型、找圆与编码耗时限制。
+    # 只处理新帧，不补处理积压旧帧；网页“识别处理 FPS”显示实际完成速度。
+    process_rate_hz: 30.0
+
+    # OpenCV 单次算子的 CPU 线程上限，正整数；同时作用于网页主进程和几何子进程。
+    # 几何进程内三个编号 ROI 并行；共享内存传原图，BPU 模型只在主进程加载一份。
+    # 避免每阶段都启动 8 线程争用 X5 的 8 个核心；不控制 BPU 核数或采集 FPS。
+    # ROS 调试同样读取此值，但 ROS 相机入口仍为串行处理，并非网页流水线。
+    opencv_threads: 2
+
+    # 相机帧/结果最大允许年龄，单位秒，须 > 0；从软件读帧完成的单调时间起算。
+    # 推理前过期不处理，处理后过期不作为新鲜结果；网页读取时也检查结果年龄。
+    # 太小会频繁丢结果，太大会允许较旧的观测；不等同于曝光到网页的总延迟。
+    # 静态图片模式不使用此年龄限制。
     max_frame_age_s: 0.5
+
+    # 仅 ROS 相机入口：首次未收到画面时的等待上限，单位秒，须 > 0。
+    # 超时退出并报告 CAMERA_NO_FRAME；网页工具继续显示等待状态，不使用此超时。
     camera_start_timeout_s: 10.0
 
-    geometry.preprocess: gray      # gray / binary_morphology
+    # ── 5. ROI 预处理（CPU/OpenCV）────────────────────────────────────────
+    # gray：BGR → 灰度 → 高斯模糊；contour 再做局部阈值，hough 直接用灰度图。
+    # binary_morphology：同样先模糊，再暗色反二值化、小核开/闭运算后找圆。
+    # 每次只走指定分支，不逐帧试遍多个算法；圆周支持检查始终用模糊灰度的边缘。
+    geometry.preprocess: gray
+
+    # 高斯核边长，正奇数，单位 px，例如 3/5/7；1 基本不产生空间平滑。
+    # 增大可去噪，也可能抹掉细环和边缘；两种预处理分支都生效。
     geometry.blur_kernel: 5
+
+    # 高斯标准差，非负，单位 px；0 表示由 OpenCV 根据核大小自动估计。
     geometry.blur_sigma: 1.2
-    geometry.binary_threshold: 100 # binary_morphology 使用暗色反二值化
+
+    # 整数 [0,255]，仅 binary_morphology 生效。
+    # 模糊灰度值 <= 此值变为白色前景，较亮部分变为黑色；暗色圆环成为前景。
+    # 提高会纳入更多较亮像素，可能使前景变粗或连片，需结合实际光照调整。
+    geometry.binary_threshold: 100
+
+    # 椭圆形结构元素边长，正奇数，单位 px，仅 binary_morphology 生效。
+    # 核越大，对细环结构影响越明显；1×1 不产生有效形态学变化。
     geometry.morphology_kernel: 3
+
+    # 开运算次数，非负整数；0 关闭。先腐蚀后膨胀，可去小白噪点，但可能断开细环。
+    # 仅 binary_morphology 生效，先开后闭。
     geometry.open_iterations: 0
+
+    # 闭运算次数，非负整数；0 关闭。先膨胀后腐蚀，可补小缺口，但可能粘连邻近环。
+    # 仅 binary_morphology 生效；gray 模式下此值为 1 也不会执行闭运算。
     geometry.close_iterations: 1
+
+    # ── 6. 圆/椭圆候选生成（默认快速轮廓拟合）─────────────────────────────
+    # contour：gray 模式先用局部自适应阈值取暗环包围的亮孔轮廓，再拟合椭圆；
+    # binary_morphology 则使用其二值掩膜取亮孔。只拟合孔边，排除虚线碎片及重复边缘。
+    # 用原灰度 Canny 边缘批量验证拟合结果，适合带连续内圈的实时圆环识别。
+    # hough：保留旧霍夫方法供离线对比；密集同心虚线可能生成上千候选，明显降速。
+    # 不自动回退到霍夫，避免轮廓失败时每帧突然阻塞；仍按 allow_bbox_fallback 处理。
+    # contour 可缩小候选搜索图；拟合前还原点坐标，并在原分辨率边缘图上验证。
+    # 以下六项仅 contour 生效；hough 保持原分辨率。
+    geometry.method: contour
+
+    # gray 模式轮廓搜索图的最长边，非负整数，单位 px；0 关闭缩小。
+    # 只缩小候选搜索，不缩小 Canny 支持检查或输出坐标；短 ROI 不放大。
+    # 192 用于限制大近景环的搜索开销；过小可能断开细环，增大可保留更多细节。
+    # binary_morphology 模式保持原分辨率，便于手动阈值/形态学调试。
+    geometry.contour_max_side_px: 192
+
+    # 局部均值阈值的邻域边长，单位原图 px，奇数且 >= 3，仅 contour + gray 生效。
+    # 局部阈值能适应纸面阴影；全 ROI 的 Otsu 阈值会把阴影误分成大黑块而吞掉环边。
+    geometry.contour_adaptive_block_size: 31
+
+    # 阈值 = 邻域均值 - C；非负，灰度级单位，仅 contour + gray 生效。
+    # 提高更严格地保留暗线，但可能断开弱环边；降低会增加纹理和噪声轮廓。
+    geometry.contour_adaptive_c: 5.0
+
+    # 拟合椭圆短半轴/长半轴下限，范围 (0,1]；1 仅容许近圆形。
+    # 0.65 允许适度斜拍；透视很强时椭圆中心不等于物理圆心的精确投影。
+    geometry.min_ellipse_axis_ratio: 0.65
+
+    # 轮廓点偏离拟合椭圆的平均近似径向误差上限，单位原图 px，须 > 0。
+    # 提高更易接纳变形、粘连轮廓，也可能把数字/杂物当成环边。
+    geometry.max_contour_fit_error_px: 2.0
+
+    # 闭合轮廓面积/拟合椭圆面积下限，范围 (0,1]。
+    # 拒绝虚线碎片、细长局部弧段向完整圆的外推；需要至少一条连续环边。
+    geometry.min_contour_area_ratio: 0.6
+
+    # 以下四个 hough_* 参数仅 method=hough 生效。
+    # HOUGH_GRADIENT 累加器分辨率比，须 > 0，通常从 >= 1 开始调节。
+    # 1：累加器与输入 ROI 同分辨率；增大会降低累加器分辨率，圆心候选更粗。
     geometry.hough_dp: 1.0
+
+    # 霍夫输出候选之间的最小圆心间距，单位 px，须 > 0。
+    # 太小会产生更多相近候选并增加筛选开销；太大可能压掉相近/同心环候选。
+    # 不要求所有同心环都被检出，一个可信圆即可提供视觉圆心。
     geometry.hough_min_distance_px: 4.0
+
+    # 霍夫内部 Canny 的高阈值，须 > 0，低阈值由 OpenCV 按其一半设置。
+    # 提高通常保留更强边缘；与下方独立圆周支持检查的 edge_* 阈值分开。
     geometry.hough_param1: 100.0
+
+    # 霍夫圆心累加器阈值，须 > 0。降低更容易出圆，也会增加错误/重复候选；
+    # 提高更严格，可能漏掉弱边缘圆。候选仍需通过第 7 组的可信度检查。
     geometry.hough_param2: 25.0
-    geometry.min_radius_ratio: 0.12 # 半径 / 原检测框短边
+
+    # 两种方法共用：候选半径下/上限 ÷ 原始检测框短边；均须 > 0，且下限 < 上限。
+    # 椭圆的名义半径取两条半轴的均值；轴比另受 min_ellipse_axis_ratio 限制。
+    # 最小半径向上取整且至少 1 px，最大半径向下取整；范围过小会直接找圆失败。
+    # 例如原框短边 200 px 时，当前搜索半径约 24～110 px。
+    # 调高下限可排除中心数字的小弧线；缩小范围可减少无关候选。
+    geometry.min_radius_ratio: 0.12
     geometry.max_radius_ratio: 0.55
+
+    # ── 7. 可信圆筛选与圆周边缘支持 ───────────────────────────────────────
+    # 圆心与原始框中心的欧氏距离上限 ÷ 原始框短边，须 > 0。
+    # 短边 200 px、值 0.25 时最多偏离 50 px；提高会放宽位置限制。
     geometry.max_center_offset_ratio: 0.25
+
+    # 独立圆周支持检查使用的 Canny 双阈值，均须 > 0，且 low < high。
+    # 输入始终为模糊灰度图；不随 binary_morphology 分支切换到二值图。
+    # 降低更容易得到弱边缘，也会增加噪声；这组阈值不替代 hough_param1。
     geometry.edge_low_threshold: 50.0
     geometry.edge_high_threshold: 100.0
+
+    # 沿每个候选圆周等角采样的点数，整数，须 >= angle_sectors。
+    # 当前 180 点约每 2° 采样一次；增大检查更细，同时增加 CPU 开销。
     geometry.circumference_samples: 180
+
+    # 径向搜索容差，非负整数，单位 px；在每个采样角度的半径 ± 此值内找边缘。
+    # 当前检查 r-3～r+3；0 仅检查候选圆周。增大更宽容，也可能让偏移圆得到支持。
+    # 同时计算边缘贴合程度 edge_alignment，越靠近候选圆周的边缘得分越高。
     geometry.radial_tolerance_px: 3
+
+    # 整个圆周有边缘支持的采样点比例门槛，范围 (0,1]；达到门槛才通过。
+    # 当前至少 55% 的采样角度须命中边缘；越严格越能拒绝残缺圆，也更容易漏检。
+    # 落到 ROI 外的采样算无支持，不会因圆弧不可见而提高支持比例。
     geometry.min_edge_support: 0.55
+
+    # 将一圈按采样顺序分成多少角段，正整数，且 <= circumference_samples。
+    # 当前 12 段约每段 30°，用于排除仅局部弧线（例如数字笔画）产生的假圆。
     geometry.angle_sectors: 12
+
+    # 单个角段内有边缘支持的采样点比例门槛，范围 (0,1]；达到才算有效角段。
     geometry.sector_support_threshold: 0.4
+
+    # 至少有效角段数，整数 [1,angle_sectors]；当前要求 12 段中至少 8 段有效。
+    # 提高要求边缘分布覆盖更多方向；它与 min_edge_support 必须同时满足。
     geometry.min_supported_sectors: 8
-    geometry.merge_distance_ratio: 0.04 # 组内最大中心距离 / 原检测框短边
+
+    # ── 8. 同心圆归并、重复候选与圆组歧义 ─────────────────────────────────
+    # 同一圆组内任意两个圆心的最大距离 ÷ 原始框短边，须 > 0。
+    # 短边 200 px、值 0.04 时最大相距 8 px；不是只检查相邻候选以链式合并。
+    # 增大更易融合偏移候选，但也可能混合不同中心；组中心按圆周支持比例加权。
+    geometry.merge_distance_ratio: 0.04
+
+    # 同组内半径差 <= 此值视为重复候选，非负，单位 px。
+    # 保留先按质量选出的候选，不把重复边缘算成额外独立圆；提高可能吞掉相邻真环。
     geometry.duplicate_radius_tolerance_px: 2.0
+
+    # 非负、无单位。最优与次优圆组得分差 <= 此值时，判为 AMBIGUOUS_CIRCLE_GROUPS。
+    # 得分综合圆周支持、边缘贴合、距框中心的距离与少量圆数加分；不是概率。
+    # 增大会更谨慎地拒绝难分圆组；减小会更容易选定一个组，0 仍拒绝完全同分。
+    # 歧义按第 2 组配置退回框中心或返回无效，不强行产生视觉圆心。
     geometry.group_ambiguity_margin: 0.04

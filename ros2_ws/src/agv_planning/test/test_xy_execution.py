@@ -168,6 +168,10 @@ class ExecutionTests(unittest.TestCase):
         work_headings = config['route_planner_node']['ros__parameters']['work_heading']
         motion_params = {key: value for key, value in config['route_planner_node']['ros__parameters'].items()
                          if key.startswith(('angle_', 'translation_')) or key == 'turn_arrival_tolerance_deg'}
+        # Numeric PID expectations must not depend on the current field tuning.
+        motion_params.update(translation_pid_kp=2., translation_pid_ki=0., translation_pid_kd=.1,
+                             angle_pid_kp=2., angle_pid_ki=0., angle_pid_kd=.1,
+                             angle_max_speed_deg_s=120.)
         self.p = RoutePlannerNode(parameter_overrides=[
             Parameter('require_map_snapshot',value=False),
             Parameter('debug_allow_any_pose',value=True),
@@ -255,6 +259,40 @@ class ExecutionTests(unittest.TestCase):
         self.feedback(x=2.398, y=.002)
         self.p._tick()
         self.assertEqual(self.p._last_state, 'COMPLETED')
+
+    def test_work_offset_is_absorbed_once_without_rebasing_or_skipping_route_corners(self):
+        self.p._publish_control = Mock()
+        for node, goal in ((6,8), (8,4)):
+            for heading in ('UP', 'RIGHT', 'DOWN', 'LEFT'):
+                for offset in ((.02,.03), (-.02,-.03)):
+                    with self.subTest(node=node, heading=heading, offset=offset):
+                        self.p._reset_context(ResetExecutor.Request(home_node=node, initial_heading=heading))
+                        self.feedback(x=1., y=2.)
+                        station_target = self.p._target_position
+                        self.feedback(x=1.+offset[0], y=2.+offset[1])
+                        request = PlanRoute.Request(request_id=f'work-{node}-{heading}-{offset}', goal=goal)
+                        plan = self.p._on_plan(request, PlanRoute.Response()).plan
+                        self.assertEqual(plan.status, 'ok', plan.reason)
+                        self.assertGreaterEqual(len(self.p._segments), 2)
+                        self.p._tick()
+                        first_target = self.p._target_position
+                        first_command = self.p._publish_control.call_args.args[:2]
+                        self.assertTrue(all(abs(v) > 0 for v in first_command))
+                        self.feedback(x=1.+offset[0], y=2.+offset[1])
+                        self.p._tick()
+                        self.assertEqual(self.p._target_position, first_target)
+                        self.assertEqual(self.p._segment_index, 0)
+                        expected = station_target
+                        for segment in self.p._segments:
+                            self.feedback(*self.p._position)
+                            self.p._tick()
+                            direction = body_to_fixed(*TRANSLATIONS[segment.opcode], 0.)
+                            expected = tuple(p+d*segment.amount/1000. for p,d in zip(expected,direction))
+                            self.assertEqual(self.p._target_position, expected)
+                            self.feedback(*expected)
+                            self.p._tick()
+                        self.assertFalse(self.p._active)
+                        self.assertEqual(self.p._current_node, goal)
 
     def test_measured_velocity_uses_same_frame_as_position_pid(self):
         self.p._reset_context(ResetExecutor.Request(home_node=1, initial_heading='DOWN'))
@@ -387,7 +425,30 @@ class ExecutionTests(unittest.TestCase):
         self.p._tick()
         self.assertEqual(self.p._target_yaw_deg, 90.)
 
-    def test_angle_stall_aborts_even_while_translation_advances(self):
+    def test_angle_pid_timeout_advances_to_next_segment(self):
+        self.p._publish_control = Mock()
+        steps = [Step(Opcode.TURN_LEFT_90, 1, 1, 0, 'RIGHT'),
+                 Step(Opcode.FORWARD_ONE_EDGE, 1, 2, 1200, 'RIGHT')]
+        self.p._start_execution('timeout-then-forward', steps, 2)
+        self.p._tick()
+        self.p._angle_progress_time = time.monotonic()-3.
+        self.feedback()
+        self.p._tick()
+        self.assertTrue(self.p._active)
+        self.assertEqual(self.p._segment_index, 1)
+        self.assertEqual(self.p._last_state, 'EXECUTING')
+        self.assertIn('角度PID无进展超时', self.p._last_reason)
+        self.assertEqual(self.p._publish_control.call_args.args[:3], (0.,0.,0.))
+        self.feedback(yaw=90.)
+        self.p._tick()
+        self.assertAlmostEqual(self.p._target_position[0], 0.)
+        self.assertAlmostEqual(self.p._target_position[1], 1.2)
+        self.feedback(y=1.2, yaw=90.)
+        self.p._tick()
+        self.assertFalse(self.p._active)
+        self.assertEqual(self.p._last_state, 'COMPLETED')
+
+    def test_angle_stall_completes_even_while_translation_advances(self):
         self.p._publish_control = Mock()
         self.start_route()
         self.feedback(x=.1, yaw=5.)
@@ -395,8 +456,8 @@ class ExecutionTests(unittest.TestCase):
         self.p._angle_progress_time = time.monotonic() - 3.
         self.feedback(x=.2, yaw=5.)
         self.p._tick()
-        self.assertEqual(self.p._last_state, 'ABORTED')
-        self.assertIn('yaw error', self.p._last_reason)
+        self.assertEqual(self.p._last_state, 'COMPLETED')
+        self.assertIn('角度PID无进展超时', self.p._last_reason)
         self.assertEqual(self.p._publish_control.call_args.args[:3], (0., 0., 0.))
 
     def test_angular_rate_feedback_is_converted_to_degrees(self):
@@ -534,7 +595,8 @@ class ExecutionTests(unittest.TestCase):
         self.feedback(x=.19, y=-.15)
         self.p._tick()
         self.assertFalse(self.p._active)
-        self.assertEqual(self.p._last_state, 'ABORTED')
+        self.assertEqual(self.p._last_state, 'COMPLETED')
+        self.assertIn('PID无进展超时', self.p._last_reason)
         self.assertEqual(self.p._publish_control.call_args.args[:3], (0., 0., 0.))
 
     def test_parking_request_validation(self):
@@ -550,20 +612,20 @@ class ExecutionTests(unittest.TestCase):
                 self.assertEqual(plan.status, 'invalid_request', plan.reason)
                 self.assertFalse(self.p._active)
 
-    def test_work_side_faces_station(self):
-        # Map axes: x right, y up. QR is on the left of the vehicle;
+    def test_work_axis_faces_station(self):
+        # Map axes: x right, y up. QR is in front of the vehicle;
         # the other stations are on its right.
         yaw = {'UP': math.pi/2, 'RIGHT': 0., 'DOWN': -math.pi/2, 'LEFT': math.pi}
-        for node, side, outward in ((2, 1., (1., 0.)), (4, -1., (0., 1.)),
-                                    (6, -1., (0., -1.)), (8, -1., (-1., 0.))):
+        for node, axis, outward in ((2, (1., 0.), (1., 0.)), (4, (0., -1.), (0., 1.)),
+                                   (6, (0., -1.), (0., -1.)), (8, (0., -1.), (-1., 0.))):
             with self.subTest(node=node):
-                facing = body_to_fixed(0., side, yaw[self.p._work_headings[node]])
+                facing = body_to_fixed(*axis, yaw[self.p._work_headings[node]])
                 for actual, expected in zip(facing, outward):
                     self.assertAlmostEqual(actual, expected)
 
     def test_in_place_work_alignment_from_every_heading(self):
         self.p._publish_control = Mock()
-        for node, target in ((2, 'DOWN'), (4, 'LEFT'), (6, 'RIGHT'), (8, 'DOWN')):
+        for node, target in ((2, 'RIGHT'), (4, 'LEFT'), (6, 'RIGHT'), (8, 'DOWN')):
             for initial in ('UP', 'RIGHT', 'DOWN', 'LEFT'):
                 with self.subTest(node=node, initial=initial):
                     self.p._reset_context(ResetExecutor.Request(home_node=node,
@@ -629,6 +691,31 @@ class ExecutionTests(unittest.TestCase):
         result=self.p._on_plan(req,PlanRoute.Response()).plan
         self.assertEqual(result.status,'ok',result.reason)
 
+    def test_serial_pause_keeps_target_and_resumes_remaining_distance(self):
+        self.p._publish_control = Mock()
+        self.start_route()
+        target = self.p._target_position
+        for _ in range(2):
+            st = CBoardStatus(odom_session_id='one', motion_epoch=1,
+                              origin_initialized=True, fault_reason='serial disconnected')
+            st.header.stamp = self.p.get_clock().now().to_msg()
+            self.p._on_board(st)
+            self.p._last_odom_received = time.monotonic()-10.
+            self.p._tick()
+            self.assertTrue(self.p._active)
+            self.assertFalse(self.p._context_invalid)
+            self.assertEqual(self.p._target_position, target)
+            self.assertEqual(self.p._publish_control.call_args.args[:3], (0., 0., 0.))
+            self.feedback(x=.6)
+            self.p._tick()
+            self.assertTrue(self.p._active)
+            self.assertEqual(self.p._target_position, target)
+            self.assertGreater(self.p._publish_control.call_args.args[0], 0.)
+        self.feedback(x=target[0], y=target[1])
+        self.p._tick()
+        self.assertFalse(self.p._active)
+        self.assertEqual(self.p._last_state, 'COMPLETED')
+
     def test_permission_generation_change_preserves_no_old_task(self):
         self.start_route()
         old=self.p._task_binding
@@ -643,7 +730,8 @@ class ExecutionTests(unittest.TestCase):
         self.feedback(x=0.,y=1.)
         self.p._tick()
         self.assertFalse(self.p._active)
-        self.assertIn('no progress',self.p._last_reason)
+        self.assertEqual(self.p._last_state, 'COMPLETED')
+        self.assertIn('PID无进展超时',self.p._last_reason)
 
     def test_stale_or_invalid_observation(self):
         self.start_route()

@@ -2,17 +2,22 @@
 mission_node:                         # 比赛调度节点名称
   ros__parameters:                    # ROS2参数入口，保留此层级
     mode: competition                 # 实车比赛模式，所有必需执行端的结果来源必须为REAL
+    use_lidar: false                   # false：不依赖雷达，跳过扫描，仅提交人工禁行地图；true须接入真实雷达执行端
+    merge_exit_navigation: true        # 原料/粗加工/首次暂存收纳后原地停稳，将离站偏移并入导航首段；false恢复回P0
     # 面向二维码板时，左侧启停区1为left，右侧启停区3为right。
     # 开局车头均朝向二维码区2；mission初始化/复位时将起点同步给路径节点。
     start_area: left                  # 比赛起点：left / right
     finish_area: left                 # 比赛最终停车终点：left / right；与起点独立，同区起停时两项填相同值
     parking_offset_mm: 200            # 出入启停区时前后轴和左右轴各自的位移，正整数mm；两轴同时运动、不转头
-    screen_controlled: false          # true：先WAIT_SETUP，接收屏幕本轮配置后初始化，OK至少2秒且就绪后自动开始
+    screen_controlled: false          # true：先WAIT_SETUP，ROUTE/CFG后等待START，提交配置后初始化，至少2秒且就绪后开始
     state_publish_rate_hz: 2.0        # 比赛状态发布频率，单位Hz，须大于0
     response_timeout_s: 5.0           # 接口响应超时，单位秒，须大于0；结果未知时不重发运动
     initialization_timeout_s: 15.0    # 初始化等待时限，单位秒，须大于0
     runtime_max_age_s: 1.0            # 执行端运行状态最大有效时长，单位秒，须大于0
     route_control_topic: /route/control  # 路径节点原始速度及状态输入，类型agv_interfaces/msg/RouteControl
+    raw_control_topic: /vision/raw/control  # 原料区域速度，仍由mission独占最终输出
+    coarse_control_topic: /vision/coarse/control  # 粗加工区域速度，仍由mission独占最终输出
+    storage_control_topic: /vision/storage/control  # 暂存平放/码垛区域速度
     control_topic: /C/controll        # mission独占的最终速度输出，类型agv_interfaces/msg/ControlCommand；C板通信只读此话题
     route_control_timeout_s: 0.3      # 当前导航速度反馈最大有效时长/接收间隔，单位秒，须大于0；超时归零并故障停车
     board_status_timeout_s: 0.2       # REAL底盘状态最大有效年龄；MOCK路线不依赖C板

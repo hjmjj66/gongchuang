@@ -1,10 +1,21 @@
 # 比赛调度
 
+整套启动使用 `bash /root/工创/tools/start_competition.sh`，支持后台运行、状态、日志及停止，
+见[统一启动说明](../agv_bringup/README.md)。原有 mission 单包入口仍只启动调度。
+`config/mission.yaml` 新增 `use_lidar: false`（仓库当前默认）：不依赖雷达服务或 Action，
+出启停区后明确跳过扫描，仅提交本轮人工禁行地图，等规划器确认后继续。初始化、监视、
+停止和复位只检查启用的执行端；所有真实运动与标定检查保持不变。
+设为 true 恢复真实雷达依赖；统一启动入口当前会因雷达包尚占位而报错。
+
+原料阶段 4、10 已接入 `/vision/raw/control`，只在对应阶段接收原料速度，其他区域和导航仍按各自入口仲裁；原料先沿工作方向前进12 mm（可调），抓取期间底盘零速；三件动作、收纳、机构空闲、运动释放及P0返回或导航交接全部确认后进入下一阶段。原料执行和标定见[原料说明](../agv_perception/RAW.md)。
+
 Python ROS2 Humble节点 `mission_node` 管理启停区斜移、开局扫描及十五比赛阶段。区域任务接收整批数组；调度统一转发底盘速度，不计算导航速度，不重复发机构命令。暂停后必须复位，复位只清软件状态，车辆、物料及机构由人工恢复。
 
-屏幕正式接入见 [agv_screen](../agv_screen/README.md)。联合入口 `ros2 launch agv_screen screen_mission.launch.py` 启动调度和屏幕通信，覆盖 `screen_controlled:=true`：先等待屏幕本轮完整配置，再初始化起点，接受 OK 至少两秒且 READY 后自动开始。通过 `/mission/configure_and_start`（`ConfigureMission`）提交当前 `run_id`、start/stop（1→节点1，2→节点3）和人工禁行编号。雷达扫描结果与人工禁行边取并集后，由 mission 统一提交地图；复位后清除人工配置并重新等待屏幕确认。原入口默认保持 YAML 起终点与手动 start。
+粗加工阶段 6、12 已增加 `/vision/coarse/control` 速度仲裁，仍由 mission 独占 `/C/controll`。作业与导航PID超时停止当前纠偏并继续下一步；粗加工最终角度结果用 `final_alignment_outcome=TIMEOUT_SKIPPED` 报告。粗加工和首次暂存返回P0的PID超时后原地停稳，报告新增 `reference_return_timed_out=true`，mission允许离站，不要求伪报 `reference_restored`。完整取放动作、收纳、停车、反馈有效和控制释放仍须确认；固定动作/通信故障不按PID超时处理。执行端配置和验证见[粗加工说明](../agv_perception/COARSE.md)。
 
-第四阶段 TODO：真实视觉确认结果和统计口径补齐后，由调度生成本轮成功抓取/放置统计，再交给屏幕显示；当前不从总步骤数推定成功数，不发送占位数字。
+屏幕正式接入见 [agv_screen](../agv_screen/README.md)。联合入口 `ros2 launch agv_screen screen_mission.launch.py` 启动调度和屏幕通信，覆盖 `screen_controlled:=true`：路径页 OK、起终点页 OK 后等待大 START；收到 START 才提交本轮配置并初始化起点，接受后至少两秒且 READY 后自动开始。通过 `/mission/configure_and_start`（`ConfigureMission`）提交当前 `run_id`、start/stop（1→节点1，3→节点3）和人工禁行编号。雷达扫描结果与人工禁行边取并集后，由 mission 统一提交地图；复位后清除人工配置并重新等待屏幕确认。原入口默认保持 YAML 起终点与手动 start。
+
+动作次数按机构执行完成统计：本轮已去重的 PICK 计入 MissionState.pick_count，PLACE/STACK 计入 place_count；反馈及最终结果不重复计数，复位清零。完整两轮各为12次。FINISHED 后屏幕切结果页显示。该计数不代表视觉验证成功；MissionState 更新后须重建相关包并重启节点。
 
 ## 导航与速度出口
 
@@ -78,7 +89,7 @@ ros2 launch agv_mission mission.launch.py mode:=competition start_area:=left
 
 默认配置为 `competition`，起点和终点均为 `left`。使用 `config:=/绝对路径/mission.yaml` 时读取该文件中的模式、起点和最终停车区；只有显式传入 `mode:=...`、`start_area:=...` 或 `finish_area:=...` 才覆盖对应配置，修改起点不会覆盖YAML中独立设置的终点。
 
-每个执行端需要 `get_runtime / stop / reset_context` 服务，类型在 `agv_interfaces`。路线前缀 `/route`，雷达 `/obstacles`，主视觉 `/vision`。区域Action为 `/vision/raw/run_batch`、`/vision/coarse/run_batch`、`/vision/storage/run_batch`，雷达为 `/obstacles/scan`。
+每个启用的执行端需要 `get_runtime / stop / reset_context` 服务，类型在 `agv_interfaces`。路线前缀 `/route`，雷达 `/obstacles`（仅use_lidar=true），主视觉 `/vision`。区域Action为 `/vision/raw/run_batch`、`/vision/coarse/run_batch`、`/vision/storage/run_batch`，雷达为 `/obstacles/scan`。
 
 真实路线节点已实现运行查询、停止、身份绑定、地图隔离、跨轮复位和调度心跳超时停车。独立调试使用空run_id；执行比赛复位后仅接受相应身份。调度使用 `/mission/heartbeat` 发布当前run_id。
 
@@ -100,6 +111,14 @@ ros2 launch agv_mission mission.launch.py mode:=competition start_area:=left
 
 ## 二维里程与控制恢复
 
+暂存阶段 8/14 接收 `/vision/storage/control`，仅转发当前匹配任务、执行进程、坐标会话和许可的速度；粗加工速度话题不会驱动暂存阶段。暂存要求三项动作、实际收纳、机构空闲和控制释放；首次按请求返回P0或收纳后原地停稳交接导航；第二次底盘全程锁定，`reference_restored=false`。两次末次角度均为 `NOT_RUN`。首批确认记录用于第二批同色码垛位置换算，详见[暂存说明](../agv_perception/STORAGE.md)。
+
 最终速度统一车体系 x前/y左、逆时针为正。REAL 模式监视 `/C/status` 的新鲜度、控制权和坐标/许可变化；活动比赛中异常立即停止转发并终止旧上下文，包括区域等待期间。MOCK 路线不依赖真实 C 板。
 
-自动路线的 `ControlCommand.odom_session_id/motion_epoch` 必须匹配当前 C 板状态，并原样转发。通信恢复不恢复旧任务。正式比赛先在起点摆好车、切PC建立里程原点，再初始化和开始。位置进度来自规划器的 x/y 方向投影，不再读取实测累计路程。
+自动路线的 `ControlCommand.odom_session_id/motion_epoch` 必须匹配当前 C 板状态，并原样转发。仅串口掉线且C板未重启时暂停并自动恢复原任务；坐标/控制权变化仍终止任务。正式比赛先在起点摆好车、切PC建立里程原点，再初始化和开始。位置进度来自规划器的 x/y 方向投影，不再读取实测累计路程。
+
+阶段6、12及首次暂存阶段8在入站水平纠偏结束并停稳后记录P0，再平移对准2号环。`merge_exit_navigation: true`（默认）且导航来源为REAL时，mission请求 `defer_reference_return=true`：收纳后保持零速，等待新鲜里程连续低速达 `execution.zero_settle_time_s`，以 `reference_return_deferred=true, reference_restored=false` 交接；导航保留原来的固定系目标，首段目标减当前实测位置会同时包含作业偏移，不额外叠加补偿、不重置导航基准，后续拐点及封路规划照常保留。P0是作业记录的实际参考，可能与导航目标存在到位容差或入站纠偏偏差；保持导航目标可得到原流程相同的后续终点，避免逐站重新建立基准累积误差。现场须允许作业位置到首段目标的斜向通行。
+
+设置 `merge_exit_navigation: false` 或使用MOCK导航时，仍请求闭环返回P0并停车，正常到位报告 `reference_restored=true, reference_return_deferred=false`；PID超时则停稳后报告 `reference_return_timed_out=true`，允许继续离站。mission按本次任务保存的请求验收，三种返回标志互斥；原料先沿工作方向前进12 mm（raw.base_motion.distance_mm可调），收纳后也按本次请求验收实际返回或导航延期返回；第二次暂存底盘全程固定，三个reference标记均为false。粗加工保留高位末次纠偏和角度超时规则，两种模式都要求完整动作、收纳、机构空闲及控制释放。原地停车交接超时使用原料 `base_motion.timeout_s` 或其余区域 `exit_motion.timeout_s`。独立区域Action默认不延期，8086网页的粗加工与首次暂存仍回P0。已移除 `camera_car_offset` 比赛配置；Action同名字段仅保留兼容，执行端忽略。
+
+此次新增Action目标和结果字段，升级须重建 `agv_interfaces` 及相关节点，并在同一新版环境下重启所有Action客户端与服务端。

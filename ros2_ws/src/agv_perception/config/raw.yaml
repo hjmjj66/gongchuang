@@ -1,0 +1,86 @@
+# 原料区：底盘前进后原地等待目标，抓取程序自身回高位；收纳后衔接离区。
+motion_config: "/root/工创/ros2_ws/src/agv_perception/config/work_motion.yaml"
+raw:
+  arm:
+    # 进入/恢复机构工作姿态动作号。
+    work_pose_cmd: 3
+    # 原料区抓取动作号，与粗加工取回动作号不同。
+    pick_cmd: 4
+    # 完成三次抓取后的机构收纳动作号。
+    stow_cmd: 2
+  vision:
+    # 原料区物料检测配置，含主相机采集参数；运行库路径由正式执行端统一覆盖。
+    material_config: /root/工创/ros2_ws/src/agv_perception/config/material.yaml
+    # 抓取准心 [u,v]，单位 px；原点在左上角，u 向右、v 向下；[] 使用图像中心。
+    target_uv_px:
+      [637.5, 375.5]
+    # 物料观测最大允许年龄，单位 s；与下方短时预测期限分别生效。
+    max_frame_age_s: 0.5
+    # 进入当前视觉姿态后等待首张新图像的上限，单位 s。
+    camera_start_timeout_s: 10.0
+  # 仅在所需颜色的新帧上累计；原始像素误差与两轴输出必须同时达标才触发抓取。
+  grasp_gate:
+    # 连续达标的新帧数；控制循环重复使用同一帧不会增加计数。
+    qualified_frames: 2
+    # 原始观测中心到抓取准心的二维欧氏距离容差，单位 px；不使用预测误差判定。
+    tolerance_px: 144
+    # 抓取时偏航控制输出幅值上限，单位 rad/s。
+    small_yaw_rad_s: 0.06
+    # 抓取时前后轴控制输出幅值上限，单位 rpm。
+    small_fb_rpm: 1.5
+  execution:
+    # 机构控制循环频率，单位 Hz；预测开启时可在两帧之间更新输出。
+    control_rate_hz: 50.0
+    # 底盘/机构反馈最大允许年龄，单位 s；底盘进退也要求新鲜反馈。
+    feedback_timeout_s: 0.2
+    # 固定动作服务响应等待上限，单位 s；不是动作执行时长。
+    arm_request_timeout_s: 5.0
+    # 执行端租约失联超时，单位 s；须与粗加工、暂存一致。
+    lease_timeout_s: 1.0
+    # 底盘到位后停车确认的最短时间，单位 s；还需机构空闲及新位置反馈。
+    zero_settle_time_s: 0.1
+  base_motion:
+    # 沿到站车头工作方向前进的距离；三件完成后退回或交由离区导航吸收，单位 mm。
+    distance_mm: 12.0
+    max_vx_mps: 0.03
+    max_vy_mps: 0.03
+    kp: 1.0
+    position_tolerance_m: 0.001
+    stop_speed_mps: 0.005
+    timeout_s: 15.0
+  gantry_servo:
+    # 机构偏航角速度上限，单位 rad/s。
+    max_yaw_rad_s: 0.7
+    # 机构前后轴转速上限，单位 rpm。
+    max_fb_rpm: 40
+    # 水平像素误差 PID；比例增益单位 (rad/s)/px。
+    yaw_pid:
+      # 比例增益，输出受本组速度上限限幅。
+      kp: 0.006
+      # 积分增益，0 关闭；积分按秒累计。
+      ki: 0.0
+      # 微分增益，0 关闭；变化率按秒计算。
+      kd: 0.0
+    # 垂直像素误差 PID；比例增益单位 rpm/px。
+    fb_pid:
+      # 比例增益，输出受本组速度上限限幅。
+      kp: 0.5
+      # 积分增益，0 关闭；积分按秒累计。
+      ki: 0.0
+      # 微分增益，0 关闭；变化率按秒计算。
+      kd: 0.0
+  # 卡尔曼滤波估计相对像素位置/速度，补偿图像年龄；仅改变伺服输入，不替代抓取门槛。
+  motion_prediction:
+    # true 启用短时预测；false 仅在新图像到达时更新 PID 输出。
+    enabled: true
+    # 中心测量噪声标准差，单位 px；增大后相对更信任运动预测。
+    measurement_std_px: 2.0
+    # 像素加速度过程噪声标准差，单位 px/s²；增大可更快适应运动变化。
+    acceleration_std_px_s2: 500.0
+    # 初始像素速度估计的标准差，单位 px/s；初始速度均值为 0。
+    initial_velocity_std_px_s: 100.0
+    # 在软件图像年龄之外附加的预测补偿时间，单位 s，可为 0。
+    extra_delay_s: 0.0
+    # 预测期限上限，单位 s；图像年龄超过此值即停轴等新帧，帧间隔超过此值则重置滤波。
+    # 须满足 extra_delay_s <= max_horizon_s <= vision.max_frame_age_s。
+    max_horizon_s: 0.15
